@@ -16,6 +16,7 @@ const apiKeys = require('./apiKeys.service');
 const { SUBMIT_LEADS_TOOL } = require('../prompts/leadSchema');
 const prompts = require('../prompts/leadGeneration');
 const analysis = require('../prompts/analysis');
+const evidence = require('./evidence.service');
 
 let fetchImpl = (...args) => fetch(...args);
 function setFetchForTests(fn) { fetchImpl = fn || ((...args) => fetch(...args)); }
@@ -61,13 +62,25 @@ const thinkingSupport = new Map(); // model -> 'level' | 'budget' | 'none'
 const quotaBlockedUntil = new Map(); // model -> timestamp
 let groundingBlockedUntil = 0;
 function resetQuotaMemoryForTests() { quotaBlockedUntil.clear(); groundingBlockedUntil = 0; thinkingSupport.clear(); }
+function quotaIds(err) { return ((err && err.details) || []).flatMap((d) => d.violations || []).map((v) => v.quotaId || '').join(','); }
+/** Free-tier per-day quotas reset at midnight Pacific time; per-minute ones within a minute. */
+function cooldownFor(err) {
+  const ids = quotaIds(err);
+  if (/PerDay/i.test(ids)) {
+    const now = new Date();
+    const pacific = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+    const msToMidnight = ((24 - pacific.getHours()) * 3600 - pacific.getMinutes() * 60 - pacific.getSeconds()) * 1000;
+    return Math.max(60000, Math.min(msToMidnight + 60000, 24 * 3600 * 1000));
+  }
+  return config.ai.gemini.quotaCooldownMs;
+}
 
 /** thinking: true (configured level), 'low' (cheap mechanical tasks) or false (none). */
 function thinkingConfigFor(model, mode, thinking) {
-  const level = thinking === 'low' ? 'low' : config.ai.gemini.thinking;
+  const level = typeof thinking === 'string' ? thinking : config.ai.gemini.thinking;
   if (level === 'off' || thinking === false) return null;
   if (mode === 'level') return { thinkingLevel: ['low', 'medium', 'high'].includes(level) ? level : 'high' };
-  if (mode === 'budget') return { thinkingBudget: thinking === 'low' ? 1024 : -1 };
+  if (mode === 'budget') return { thinkingBudget: level === 'low' ? 1024 : level === 'medium' ? 8192 : -1 };
   return null;
 }
 
@@ -122,8 +135,12 @@ class GeminiClient {
         } catch (err) {
           lastErr = err;
           if (err.status === 400 && /thinking/i.test(err.message) && mode !== 'none') { mode = mode === 'level' ? 'budget' : 'none'; attempt--; continue; }
-          if (err.status === 503 || err.status === 500 || err.code === 'NETWORK') { if (attempt < config.ai.gemini.maxRetries) { await sleep(Math.min(15000, 2500 * (attempt + 1))); continue; } break; }
-          if (err.status === 429) { quotaBlockedUntil.set(model, Date.now() + config.ai.gemini.quotaCooldownMs); break; } // next model in the chain
+          if (err.status === 503 || err.status === 500 || err.code === 'NETWORK' || err.status === 504) {
+            if (attempt < config.ai.gemini.maxRetries && err.status !== 504) { await sleep(Math.min(15000, 2500 * (attempt + 1))); continue; }
+            quotaBlockedUntil.set(model, Date.now() + config.ai.gemini.overloadCooldownMs); // overloaded / timing out: skip for a while
+            break;
+          }
+          if (err.status === 429) { quotaBlockedUntil.set(model, Date.now() + cooldownFor(err)); break; } // next model in the chain
           if (err.status === 404) { quotaBlockedUntil.set(model, Date.now() + 24 * 3600 * 1000); break; }
           throw err;
         }
@@ -229,7 +246,7 @@ async function groundedGenerate(client, { system, userText, webSearch, generatio
       if (err instanceof GeminiApiError && err.status === 429 && tools.length) {
         logger.warn('Gemini grounding quota exhausted on every model; retrying without web research', { message: err.message.slice(0, 160) });
         groundingBlockedUntil = Date.now() + config.ai.gemini.groundingCooldownMs;
-        for (const m of quotaBlockedUntil.keys()) quotaBlockedUntil.delete(m); // those 429s were about grounding, not the models
+        for (const m of quotaBlockedUntil.keys()) if (!/PerDay/i.test(quotaIds(err))) quotaBlockedUntil.delete(m); // per-minute 429s during grounding were about grounding, not the models
         warnings.push('grounding_unavailable');
         tools = [];
         continue;
@@ -303,12 +320,74 @@ async function testConnection(userId) {
 const EXTRACTION_SYSTEM = `You convert a research report about businesses into strict JSON that follows the given schema exactly.
 Rules: include ONLY businesses and facts that appear in the report; never add, guess or "complete" any phone number, email, website, address, name, handle or figure. Use null (or an empty array) for anything the report does not state. Set each field_verification entry to "verified" only when the report shows the value together with a URL where it was seen, "estimated" when the report marks it as an estimate or inference, otherwise "unknown". Copy every URL mentioned for a business into its source_urls. Set confidence to "verified" when name and phone are verified with URLs, "partially_verified" when the name is verified but contact details are only partly verified, "estimated" when most details are inferred, and "needs_verification" otherwise. If the report says no qualifying businesses were found, return an empty leads array and explain in search_notes.`;
 
+const EVIDENCE_SYSTEM_SUFFIX = `
+
+EVIDENCE MODE: You are given EVIDENCE gathered by our own web searches (search results, and extracts of pages we downloaded). Treat the evidence as the only source of truth for this task:
+- Every business you return must appear in the evidence (by name), and every phone number, WhatsApp number, email, website, address, social profile URL and person name must be copied exactly from the evidence. If a value is not in the evidence, use null.
+- Put the evidence URLs where each fact appears into source_urls. Set field_verification to "verified" for values copied from the evidence, "estimated" for inferences (size, opportunities), "unknown" otherwise.
+- Directory pages (e.g. listing sites) often show many businesses with their phone numbers: extract each business separately.
+- Prefer businesses that match the niche and city and the panel qualification rules; skip businesses that clearly fail them (for the Strategy panel: skip businesses whose own official website with online booking is in the evidence).
+- Return up to the requested number of leads. Fewer is fine; never invent.`;
+
+function useEvidenceMode(webSearch) {
+  const mode = config.ai.gemini.researchMode;
+  if (!webSearch) return false;
+  if (mode === 'evidence') return true;
+  if (mode === 'native') return false;
+  return groundingBlockedUntil > Date.now();
+}
+
+/** Lead generation from server-gathered evidence: one JSON call per batch. */
+async function generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage }) {
+  const niche = niches[0];
+  const ev = await evidence.gather({ panel, niche, city });
+  const rendered = evidence.render(ev);
+  const userText = `${prompts.buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled: true }).replace(/Return the leads by calling submit_leads once\./, '').replace(/Web search is available: use it to find and confirm each business before including it\./, 'Use ONLY the evidence below.')}
+
+===== EVIDENCE =====
+${rendered}
+===== END OF EVIDENCE =====
+
+Return the JSON now (search_notes: say how many distinct qualifying businesses the evidence supports and what was missing).`;
+  const { response, model } = await client.generate({
+    systemInstruction: { parts: [{ text: system + EVIDENCE_SYSTEM_SUFFIX }] },
+    contents: [{ role: 'user', parts: [{ text: userText }] }],
+    generationConfig: { temperature: 0.1, maxOutputTokens: config.ai.gemini.maxOutputTokens, responseMimeType: 'application/json', responseSchema: LEADS_SCHEMA },
+  }, { timeoutMs: config.ai.gemini.evidenceTimeoutMs, thinking: config.ai.gemini.evidenceThinking });
+  addUsage(usage, response, 0);
+  usage.web_search_requests += ev.queries.length;
+  const data = parseJson(candidateText(response));
+  if (!data) {
+    logger.warn('Gemini evidence-mode extraction returned unreadable JSON', { model, finish: finishReason(response), usage: response && response.usageMetadata });
+    throw new AppError(`Gemini returned unreadable JSON (${finishReason(response) || 'no candidate'}). Please try again.`, 502, 'ai_bad_output');
+  }
+  const leads = [];
+  const rejected = [];
+  const notes = [];
+  for (const raw of Array.isArray(data.leads) ? data.leads : []) {
+    const v = evidence.verifyLead(raw, ev);
+    if (!v.ok) { rejected.push({ business_name: (raw && raw.business_name) || 'unknown', reason: v.reason }); continue; }
+    if (v.changes.length) notes.push(`${v.lead.business_name}: ${v.changes.join('; ')}`);
+    leads.push(v.lead);
+  }
+  return { leads, rejected, model, ev, notes, searchNotes: String(data.search_notes || '') };
+}
+
 async function generateLeadCandidates({ userId, panel, niches, city, count, excludeNames = [], webSearch = config.ai.gemini.webSearch }) {
   const { client, source } = await getClientForUser(userId);
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, web_search_requests: 0 };
   const sources = new Set();
   const system = (panel === 'strategy' ? prompts.STRATEGY_SYSTEM : prompts.SERVICE_SYSTEM).replace(/web search/gi, 'Google Search').replace(/call the submit_leads tool exactly once with all leads\. Do not write the leads as plain text\./i, 'write the findings report described in the task.');
-  const researchPrompt = `${prompts.buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled: webSearch }).replace(/Return the leads by calling submit_leads once\./, '')}
+  try {
+    // ---- Evidence mode (free): our own web searches + page reading, one model call ----
+    if (useEvidenceMode(webSearch)) {
+      const r = await generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage });
+      for (const u of r.ev.urls) sources.add(u);
+      const notes = [`${r.searchNotes}`.slice(0, 1200), `Evidence: ${r.ev.queries.length} searches, ${r.ev.results.length} results, ${r.ev.pages.length} pages read, ${r.ev.phones.size} phone numbers found.`, ...(r.notes.length ? ['Verification: ' + r.notes.join(' | ').slice(0, 800)] : [])];
+      return { leads: r.leads, rejected: r.rejected, searchNotes: notes.filter(Boolean).join('\n'), sources: [...sources], usage, model: r.model, webSearchUsed: true, researchMode: 'evidence', warnings: [], keySource: source, report: evidence.render(r.ev, { maxChars: 6000 }) };
+    }
+    // ---- Native mode: Google Search grounding through the model ----
+    const researchPrompt = `${prompts.buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled: webSearch }).replace(/Return the leads by calling submit_leads once\./, '')}
 
 OUTPUT FORMAT for this research step (plain text, not JSON): first a line "SEARCH NOTES:" with what you searched and how many real businesses you could confirm; then one section per business:
 ### <Business name>
@@ -324,17 +403,23 @@ OUTPUT FORMAT for this research step (plain text, not JSON): first a line "SEARC
 - Evidence: list of every URL used for this business
 - Verification summary: which of name / phone / website / address / socials / people you saw on a source vs estimated
 Finish with "END OF REPORT".`;
-  try {
     const { data, report, model, extractionModel, toolsUsed, warnings } = await researchThenExtract(client, {
       system, researchPrompt, extractionSystem: EXTRACTION_SYSTEM,
       extractionPrompt: `Convert the research report into JSON for the ${panel === 'strategy' ? 'STRATEGY LEADS' : 'SERVICE SALES LEADS'} panel. Requested niches: ${niches.join('; ')}. City: ${city}. Return at most ${count} leads.`,
       schema: LEADS_SCHEMA, webSearch, usage, sources,
     });
+    if (warnings.includes('grounding_unavailable') && config.ai.gemini.researchMode === 'auto') {
+      // Grounding was refused mid-way: redo this batch in evidence mode rather than trusting memory.
+      const r = await generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage });
+      for (const u of r.ev.urls) sources.add(u);
+      const notes = [`${r.searchNotes}`.slice(0, 1200), `Evidence: ${r.ev.queries.length} searches, ${r.ev.results.length} results, ${r.ev.pages.length} pages read, ${r.ev.phones.size} phone numbers found.`, ...(r.notes.length ? ['Verification: ' + r.notes.join(' | ').slice(0, 800)] : [])];
+      return { leads: r.leads, rejected: r.rejected, searchNotes: notes.filter(Boolean).join('\n'), sources: [...sources], usage, model: r.model, webSearchUsed: true, researchMode: 'evidence', warnings: [], keySource: source, report: evidence.render(r.ev, { maxChars: 6000 }) };
+    }
     const leads = Array.isArray(data.leads) ? data.leads : [];
     const webSearchUsed = webSearch && toolsUsed.includes('google_search');
     const notes = [String(data.search_notes || '').slice(0, 1800)];
-    if (warnings.includes('grounding_unavailable')) notes.push('WARNING: Google Search grounding is not available on this Gemini API key (quota exhausted / free tier). These leads were produced from the model\'s own knowledge and are saved as "Needs Verification". Enable billing in Google AI Studio to unlock web research.');
-    return { leads, searchNotes: notes.filter(Boolean).join('\n'), sources: [...sources], usage, model: extractionModel === model ? model : `${model} (+${extractionModel})`, webSearchUsed, warnings, keySource: source, report };
+    if (warnings.includes('grounding_unavailable')) notes.push('WARNING: web research was not available for this batch; these leads come from the model\'s own knowledge and are saved as "Needs Verification".');
+    return { leads, rejected: [], searchNotes: notes.filter(Boolean).join('\n'), sources: [...sources], usage, model: extractionModel === model ? model : `${model} (+${extractionModel})`, webSearchUsed, researchMode: 'native', warnings, keySource: source, report };
   } catch (err) {
     const mapped = mapError(err); mapped.usage = usage; throw mapped;
   }
@@ -346,6 +431,19 @@ async function generateBusinessProfile({ userId, contact, calls, previousResearc
   const sources = new Set();
   const context = analysis.contactContext(contact, calls, previousResearch);
   try {
+    if (webSearch && useEvidenceMode(true)) {
+      const ev = await evidence.gatherForBusiness({ name: contact.business_name, city: contact.city });
+      const { response, model } = await client.generate({
+        systemInstruction: { parts: [{ text: analysis.PROFILE_SYSTEM + '\nEVIDENCE MODE: use only the business record, its call history and the evidence provided; copy facts exactly, mark everything else as estimated, and list every evidence URL you relied on in sources_used.' }] },
+        contents: [{ role: 'user', parts: [{ text: `${context}\n\n===== EVIDENCE (our own web searches) =====\n${evidence.render(ev)}\n===== END OF EVIDENCE =====\n\nProduce the business profile and customized automation proposal outline for the meeting.` }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: config.ai.gemini.maxOutputTokens, responseMimeType: 'application/json', responseSchema: toGeminiSchema(analysis.BUSINESS_PROFILE_SCHEMA) },
+      });
+      addUsage(usage, response, 0);
+      const data = parseJson(candidateText(response));
+      if (!data) throw new AppError('Gemini returned an unreadable analysis. Please try again.', 502, 'ai_bad_output');
+      for (const u of ev.urls) sources.add(u);
+      return { data, sources: [...sources].slice(0, 40), usage, model, researchMode: 'evidence' };
+    }
     if (webSearch) {
       const { data, model } = await researchThenExtract(client, {
         system: analysis.PROFILE_SYSTEM.replace(/web search/gi, 'Google Search'),
@@ -385,7 +483,8 @@ async function generateBookingAnalysis({ userId, contact, calls }) {
 }
 
 function describe() {
-  return { provider: 'gemini', provider_label: 'Google Gemini', model: config.ai.gemini.model, fallback_models: config.ai.gemini.fallbackModels, web_search: config.ai.gemini.webSearch, url_context: config.ai.gemini.urlContext, thinking: config.ai.gemini.thinking, search_label: 'Google Search grounding' };
+  const evidenceMode = useEvidenceMode(config.ai.gemini.webSearch);
+  return { provider: 'gemini', provider_label: 'Google Gemini', model: config.ai.gemini.model, fallback_models: config.ai.gemini.fallbackModels, web_search: config.ai.gemini.webSearch, url_context: config.ai.gemini.urlContext, thinking: config.ai.gemini.thinking, research_mode: config.ai.gemini.researchMode, evidence_mode_active: evidenceMode, search_label: evidenceMode ? 'built-in web research (free search engine + page reading)' : 'Google Search grounding' };
 }
 
-module.exports = { testConnection, generateLeadCandidates, generateBusinessProfile, generateBookingAnalysis, mapError, describe, getClientForUser, toGeminiSchema, setFetchForTests, resetQuotaMemoryForTests, GeminiApiError, GeminiClient, LEADS_SCHEMA };
+module.exports = { testConnection, generateLeadCandidates, generateBusinessProfile, generateBookingAnalysis, mapError, describe, getClientForUser, toGeminiSchema, setFetchForTests, resetQuotaMemoryForTests, cooldownFor, useEvidenceMode, GeminiApiError, GeminiClient, LEADS_SCHEMA };

@@ -54,15 +54,19 @@ const config = {
       apiKey: env.GEMINI_API_KEY || env.GOOGLE_API_KEY || '',
       baseUrl: env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta',
       model: env.GEMINI_MODEL || 'gemini-3.1-pro-preview',
-      fallbackModels: (env.GEMINI_FALLBACK_MODELS || 'gemini-3.8-flash,gemini-flash-latest,gemini-3.5-flash,gemini-3.1-flash-lite').split(',').map((m) => m.trim()).filter(Boolean),
+      fallbackModels: (env.GEMINI_FALLBACK_MODELS || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-flash-latest,gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-flash-lite-latest').split(',').map((m) => m.trim()).filter(Boolean),
+      researchMode: (env.GEMINI_RESEARCH_MODE || 'auto').toLowerCase(), // auto | native | evidence
       webSearch: bool(env.GEMINI_WEB_SEARCH, true),
       urlContext: bool(env.GEMINI_URL_CONTEXT, true),
       thinking: env.GEMINI_THINKING || 'high', // high | medium | low | off  (Gemini 3 thinkingLevel; older models use a dynamic budget)
       temperature: Number.isFinite(parseFloat(env.GEMINI_TEMPERATURE)) ? parseFloat(env.GEMINI_TEMPERATURE) : 0.2,
       timeoutMs: int(env.GEMINI_TIMEOUT_MS, 170000),
-      maxRetries: int(env.GEMINI_MAX_RETRIES, 3),
+      maxRetries: int(env.GEMINI_MAX_RETRIES, 2),
+      overloadCooldownMs: int(env.GEMINI_OVERLOAD_COOLDOWN_MS, 120 * 1000),
+      evidenceTimeoutMs: int(env.GEMINI_EVIDENCE_TIMEOUT_MS, 120000),
+      evidenceThinking: env.GEMINI_EVIDENCE_THINKING || 'medium', // thinking level for evidence-mode extraction
       maxOutputTokens: int(env.GEMINI_MAX_OUTPUT_TOKENS, 65536),
-      quotaCooldownMs: int(env.GEMINI_QUOTA_COOLDOWN_MS, 10 * 60 * 1000),
+      quotaCooldownMs: int(env.GEMINI_QUOTA_COOLDOWN_MS, 65 * 1000),
       groundingCooldownMs: int(env.GEMINI_GROUNDING_COOLDOWN_MS, 30 * 60 * 1000),
     },
   },
@@ -76,6 +80,22 @@ const config = {
     fallbacks: bool(env.CLAUDE_ENABLE_FALLBACKS, true),
     timeoutMs: int(env.CLAUDE_TIMEOUT_MS, 55000),
     effort: env.CLAUDE_EFFORT || 'medium',
+  },
+
+  // Free web research (evidence mode): key-less search engine + page reading
+  websearch: {
+    engine: (env.WEB_SEARCH_ENGINE || 'duckduckgo').toLowerCase(), // duckduckgo | brave | serper
+    braveApiKey: env.BRAVE_SEARCH_API_KEY || '',
+    minGapMs: int(env.WEB_SEARCH_MIN_GAP_MS, 400),
+    timeoutMs: int(env.WEB_SEARCH_TIMEOUT_MS, 15000),
+  },
+  evidence: {
+    timeBudgetMs: int(env.EVIDENCE_TIME_BUDGET_MS, 45000),
+    maxPages: int(env.EVIDENCE_MAX_PAGES, 8),
+    pageTimeoutMs: int(env.EVIDENCE_PAGE_TIMEOUT_MS, 8000),
+    maxPageBytes: int(env.EVIDENCE_MAX_PAGE_BYTES, 400000),
+    maxPageChars: int(env.EVIDENCE_MAX_PAGE_CHARS, 4500),
+    maxPromptChars: int(env.EVIDENCE_MAX_PROMPT_CHARS, 36000),
   },
 
   search: {

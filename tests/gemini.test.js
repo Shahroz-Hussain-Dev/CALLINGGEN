@@ -108,21 +108,25 @@ test('reports a configuration error when no Gemini key exists', async () => {
   finally { apiKeys.resolveKeyForUser = origResolve; }
 });
 
-test('falls back to ungrounded research when grounding is quota-blocked, and flags the results', async () => {
+test('switches to evidence mode when native grounding is quota-blocked', async () => {
   const origResolve = apiKeys.resolveKeyForUser; apiKeys.resolveKeyForUser = serverKey;
-  const calls = fakeFetch(async ({ body, n }) => {
+  const evidence = require('../server/services/evidence.service');
+  const origGather = evidence.gather;
+  evidence.gather = async () => ({ queries: ['q'], results: [{ title: 'Some Salon Karachi', snippet: 'call 0300-5556667', url: 'https://dir.example/some-salon', host: 'dir.example' }], pages: [], corpus: 'some salon karachi call 0300-5556667 https://dir.example/some-salon', phones: new Set(['923005556667']), urls: new Set(['https://dir.example/some-salon']), elapsed_ms: 1 });
+  const calls = fakeFetch(async ({ body }) => {
     if (body.tools && body.tools.length) return { status: 429, json: { error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'quota' } } };
-    if (!body.generationConfig.responseMimeType) return { json: textResponse('SEARCH NOTES: from memory\n### Some Salon\n- Phone: not found\nEND OF REPORT') };
-    return { json: textResponse(JSON.stringify({ search_notes: 'from memory', leads: [{ business_name: 'Some Salon', city: 'Lahore', phone: null }] })) };
+    if (!body.generationConfig.responseMimeType) return { json: textResponse('SEARCH NOTES: from memory\nEND OF REPORT') };
+    return { json: textResponse(JSON.stringify({ search_notes: 'from evidence', leads: [{ business_name: 'Some Salon', city: 'Karachi', phone: '0300-5556667', social_profiles: {}, source_urls: ['https://dir.example/some-salon'] }] })) };
   });
   try {
     const r = await gemini.generateLeadCandidates({ userId: 'u', panel: 'service', niches: ['Travel Agencies'], city: 'Karachi', count: 2, webSearch: true });
-    assert.equal(r.webSearchUsed, false);
-    assert.ok(r.warnings.includes('grounding_unavailable'));
-    assert.match(r.searchNotes, /Needs Verification/);
+    assert.equal(r.researchMode, 'evidence');
+    assert.equal(r.webSearchUsed, true);
     assert.equal(r.leads.length, 1);
+    assert.equal(r.leads[0].field_verification.phone, 'verified');
     assert.ok(calls.some((c) => c.body.tools), 'grounded attempt was made first');
-  } finally { apiKeys.resolveKeyForUser = origResolve; gemini.setFetchForTests(null); }
+    assert.ok(gemini.useEvidenceMode(true), 'grounding is now remembered as unavailable');
+  } finally { apiKeys.resolveKeyForUser = origResolve; gemini.setFetchForTests(null); evidence.gather = origGather; }
 });
 
 test('retries extraction on a different model when the JSON output is unreadable', async () => {
@@ -140,4 +144,40 @@ test('retries extraction on a different model when the JSON output is unreadable
     assert.equal(models.length, 2);
     assert.notEqual(models[0], models[1]);
   } finally { apiKeys.resolveKeyForUser = origResolve; gemini.setFetchForTests(null); }
+});
+
+test('evidence mode: one JSON call grounded in server-gathered evidence, with server-side verification', async () => {
+  const origResolve = apiKeys.resolveKeyForUser; apiKeys.resolveKeyForUser = serverKey;
+  const evidence = require('../server/services/evidence.service');
+  const origGather = evidence.gather;
+  const config = require('../server/config');
+  const origMode = config.ai.gemini.researchMode; config.ai.gemini.researchMode = 'evidence';
+  evidence.gather = async () => ({ queries: ['q1', 'q2'], results: [{ title: 'Glow Studio Lahore', snippet: 'WhatsApp 0300-1234567', url: 'https://instagram.com/glowstudio.pk', host: 'instagram.com' }], pages: [], corpus: 'glow studio lahore whatsapp 0300-1234567 https://instagram.com/glowstudio.pk', phones: new Set(['923001234567']), urls: new Set(['https://instagram.com/glowstudio.pk']), elapsed_ms: 5 });
+  const calls = fakeFetch(async ({ body }) => {
+    assert.equal(body.tools, undefined, 'no native grounding tools in evidence mode');
+    assert.match(body.contents[0].parts[0].text, /===== EVIDENCE =====/);
+    assert.match(body.systemInstruction.parts[0].text, /EVIDENCE MODE/);
+    return { json: textResponse(JSON.stringify({ search_notes: 'two candidates', leads: [
+      { business_name: 'Glow Studio', city: 'Lahore', phone: '0300-1234567', social_profiles: { instagram: 'https://instagram.com/glowstudio.pk' }, source_urls: ['https://instagram.com/glowstudio.pk'] },
+      { business_name: 'Imaginary Salon', city: 'Lahore', phone: '0300-0000000', social_profiles: {}, source_urls: [] },
+    ] })) };
+  });
+  try {
+    const r = await gemini.generateLeadCandidates({ userId: 'u', panel: 'strategy', niches: ['Bridal Makeup Studios'], city: 'Lahore', count: 5, webSearch: true });
+    assert.equal(calls.length, 1, 'a single model call per batch');
+    assert.equal(r.researchMode, 'evidence');
+    assert.equal(r.webSearchUsed, true);
+    assert.equal(r.leads.length, 1);
+    assert.equal(r.leads[0].business_name, 'Glow Studio');
+    assert.equal(r.leads[0].field_verification.phone, 'verified');
+    assert.deepEqual(r.rejected, [{ business_name: 'Imaginary Salon', reason: 'not_in_evidence' }]);
+    assert.equal(r.usage.web_search_requests, 2);
+  } finally { apiKeys.resolveKeyForUser = origResolve; gemini.setFetchForTests(null); evidence.gather = origGather; config.ai.gemini.researchMode = origMode; }
+});
+
+test('per-day quota errors cool a model down until the Pacific-time reset; per-minute ones for about a minute', () => {
+  const day = gemini.cooldownFor({ details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }] }] });
+  assert.ok(day >= 60000 && day <= 24 * 3600 * 1000);
+  const minute = gemini.cooldownFor({ details: [{ violations: [{ quotaId: 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' }] }] });
+  assert.equal(minute, require('../server/config').ai.gemini.quotaCooldownMs);
 });

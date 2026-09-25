@@ -56,9 +56,11 @@ and all query indexes. Nothing else to run.
 
 ## 6. Configure the AI provider
 * **Gemini (default):** set `GEMINI_API_KEY` (Google AI Studio). Primary model `gemini-3.1-pro-preview`
-  with automatic fallback to the current Flash models (`GEMINI_FALLBACK_MODELS`). For the best results the
-  key's Google Cloud project must have billing enabled: the free tier has no quota for Pro models or for
-  Google Search grounding, so research then runs ungrounded and leads are marked *Needs Verification*.
+  with automatic fallback to the current Flash models (`GEMINI_FALLBACK_MODELS`). On a free-tier key
+  (no billing) Pro models and Google Search grounding are unavailable; the app then uses the free
+  built-in web research (DuckDuckGo + page reading + server-side fact verification) with the Flash
+  models, one model call per batch. Free-tier daily request limits apply per model; the fallback chain
+  spreads batches across several Flash models. Enabling billing unlocks Pro and native grounding.
 * **Anthropic:** set `ANTHROPIC_API_KEY` and `AI_PROVIDER=anthropic`. Default model `claude-opus-5`.
 * Each user can save a personal key in **Settings → AI configuration** (encrypted with
   `APP_ENCRYPTION_KEY`) and test the connection there. The personal key takes precedence for that user.

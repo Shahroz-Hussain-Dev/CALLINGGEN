@@ -23,6 +23,8 @@ to the browser.
 | `GEMINI_API_KEY` | yes for Gemini | Gemini Developer API key from Google AI Studio (`AIza…` or `AQ.…`). Users may also store personal keys (encrypted). |
 | `GEMINI_MODEL` | no | Primary model, default `gemini-3.1-pro-preview` (best quality; needs a billed key). |
 | `GEMINI_FALLBACK_MODELS` | no | Comma-separated chain tried automatically when a model is unavailable on the key's tier. Default `gemini-3.8-flash,gemini-flash-latest,gemini-3.5-flash,gemini-3.1-flash-lite`. |
+| `GEMINI_RESEARCH_MODE` | no | `auto` (default): Google Search grounding when the key has quota, otherwise the free built-in web research; `evidence`: always built-in research; `native`: always grounding. |
+| `GEMINI_EVIDENCE_THINKING` / `GEMINI_EVIDENCE_TIMEOUT_MS` | no | Thinking level (default `medium`) and timeout (default 120000) for the evidence-mode call. |
 | `GEMINI_WEB_SEARCH` | no | `true` (default): research uses Google Search grounding and cites sources. Free-tier keys have no grounding quota; the app then falls back to ungrounded research and marks leads *Needs Verification*. |
 | `GEMINI_URL_CONTEXT` | no | `true` (default): lets the model open pages it finds to confirm details. |
 | `GEMINI_THINKING` | no | `high` (default) / `medium` / `low` / `off`. |
@@ -41,6 +43,15 @@ to the browser.
 | `CLAUDE_EFFORT` | no | `low` / `medium` (default) / `high` reasoning effort. |
 | `CLAUDE_ENABLE_FALLBACKS` | no | Server-side refusal fallbacks (default true; degrades automatically if unsupported). |
 | `CLAUDE_TIMEOUT_MS` | no | Per-request timeout (default 55000). Keep below the function `maxDuration`. |
+
+## Free built-in web research (evidence mode)
+| Variable | Description |
+|---|---|
+| `WEB_SEARCH_ENGINE` | `duckduckgo` (default, no key) / `brave` (needs `BRAVE_SEARCH_API_KEY`, free tier) / `serper`. Keyed engines are used first when configured; DuckDuckGo is always the fallback. |
+| `BRAVE_SEARCH_API_KEY` | Optional Brave Search API key. |
+| `EVIDENCE_TIME_BUDGET_MS` | Total time spent searching and reading pages per batch (default 45000). |
+| `EVIDENCE_MAX_PAGES` | Pages read per batch (default 8). |
+| `EVIDENCE_MAX_PROMPT_CHARS` | Evidence characters passed to the model (default 36000). |
 
 ## Business-data provider (optional)
 | Variable | Description |

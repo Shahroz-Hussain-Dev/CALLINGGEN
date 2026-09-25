@@ -4,6 +4,7 @@ const { requireAuth } = require('../middleware/auth');
 const ai = require('../services/ai.service');
 const apiKeys = require('../services/apiKeys.service');
 const search = require('../services/search');
+const websearch = require('../services/websearch.service');
 
 const router = express.Router();
 router.use(['/ai', '/claude'], requireAuth);
@@ -15,6 +16,13 @@ async function status(req, res) {
 async function test(req, res) { res.json(await ai.testConnection(req.user.id)); }
 async function saveKey(req, res) { res.json(await apiKeys.saveKey(req.user, (req.body || {}).api_key, (req.body || {}).provider)); }
 async function removeKey(req, res) { res.json(await apiKeys.removeKey(req.user, (req.body || {}).provider || req.query.provider)); }
+
+// Read-only self-test of the free web research layer (fixed query, no data written)
+router.get('/ai/search-test', async (req, res) => {
+  const started = Date.now();
+  const results = await websearch.search('beauty salon Lahore instagram', { count: 5 });
+  res.json({ ok: results.length > 0, engine: websearch.describe(), results: results.map((r) => ({ title: r.title, url: r.url })), latency_ms: Date.now() - started });
+});
 
 // Current routes + legacy aliases (/api/claude/*) used by older clients
 for (const prefix of ['/ai', '/claude']) {

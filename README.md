@@ -99,8 +99,15 @@ See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for the step-by-step guide. Sum
    a grounded research call (Google Search + URL reading, high thinking, low temperature) that writes an
    evidence report with a URL for every fact, then a strict-JSON extraction call that may only restate
    facts from the report. With the Anthropic provider the same rules apply through Claude's web search
-   and a strict `submit_leads` tool. Without web research (e.g. a free-tier Gemini key, which has no
-   grounding quota) leads are still produced but marked *Needs Verification* and a warning is shown.
+   and a strict `submit_leads` tool.
+   **Free mode (no paid grounding needed):** when the Gemini key has no Google-grounding quota (free
+   tier), the app runs its own web research: six DuckDuckGo searches per niche and city, reads up to eight
+   of the resulting pages (directories, salon and company websites; social pages via their search
+   snippets), extracts phone numbers, emails and social links, and gives that evidence bundle to the
+   model in a single strict-JSON call. The server then verifies every returned fact against the evidence:
+   a phone, website, email, social profile or person name that does not appear in the gathered pages is
+   removed, and a business whose name is not in the evidence is rejected. Leads therefore carry real
+   source URLs and honest verification badges even on a free key.
 4. Every candidate is normalized (name, phone, domain, social handles), optionally verified through
    the pluggable business-data provider (`server/services/search/`), checked against the **entire
    database** (all employees, both panels, all history) using phone, website domain, name+city,

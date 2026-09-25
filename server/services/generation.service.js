@@ -203,10 +203,16 @@ async function runBatch(user, jobId, { forceUnlock = false } = {}) {
     const e = new AppError(mapped.message, mapped.status, mapped.code); e.expose = true; e.details = { job: jobView(await getJob(id)) };
     throw e;
   }
-  summary.received = generated.leads.length;
+  summary.received = generated.leads.length + ((generated.rejected || []).length);
   summary.web_search_used = generated.webSearchUsed;
   summary.model = generated.model || null;
   summary.warnings = generated.warnings || [];
+  summary.research_mode = generated.researchMode || null;
+  summary.sources = (generated.sources || []).length;
+  for (const rj of generated.rejected || []) {
+    summary.rejected++;
+    await db.query('INSERT INTO generation_rejections (job_id, list_id, business_name, normalized_name, reason, details) VALUES ($1, $2, $3, $4, $5, $6)', [id, job.list_id, String(rj.business_name || 'unknown').slice(0, 200), null, rj.reason || 'not_in_evidence', JSON.stringify({ city, stage: 'evidence_verification' })]);
+  }
   summary.search_notes = String(generated.searchNotes || '').slice(0, 1000);
   const provider = search.getProvider();
 
