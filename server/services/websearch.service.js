@@ -68,6 +68,13 @@ function parseJinaMarkdown(md, decodeLink) {
   return out;
 }
 
+/** Drops results that share no word with the query (a proxied engine sometimes serves an unrelated cached page). */
+function relevantOnly(results, query) {
+  const tokens = String(query).toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 4);
+  if (!tokens.length) return results;
+  return results.filter((r) => { const hay = `${r.title} ${r.snippet} ${r.url}`.toLowerCase(); return tokens.some((t) => hay.includes(t)); });
+}
+
 const JINA_READER = 'https://r.jina.ai/';
 let lastJinaAt = 0;
 let jinaRateLimitedUntil = 0; // key-less Jina Reader allows ~20 requests/minute per IP
@@ -214,7 +221,7 @@ const engines = {
       try {
         const r = await readViaJina(url);
         if (r.status !== 200) { lastErr = new Error(`Jina Reader (${name}) returned HTTP ${r.status}`); continue; }
-        const results = parseJinaMarkdown(r.text, decode);
+        const results = relevantOnly(parseJinaMarkdown(r.text, decode), query);
         if (results.length) return results.slice(0, count);
         if (/anomaly|captcha|challenge|unusual traffic|are you a robot|access denied/i.test(r.text.slice(0, 6000))) lastErr = new Error(`${name} challenged Jina Reader`);
       } catch (err) { if (err.blocked) throw err; lastErr = err; }
@@ -308,4 +315,4 @@ async function search(query, { count = 8 } = {}) {
 async function describe() { await loadKeys(); const chain = engineChain(); const live = activeEngines(); return { engine: live[0], engines: chain, blocked: chain.filter((e) => !live.includes(e)), keyed: chain.filter((e) => !FREE_ENGINES.includes(e)), free: FREE_ENGINES.includes(live[0]) }; }
 function resetForTests() { cache.clear(); engineBlockedUntil.clear(); emptyStreak.clear(); lastRequestAt = 0; lastBingAt = 0; lastJinaAt = 0; jinaRateLimitedUntil = 0; settings.clearKeyCache(); }
 
-module.exports = { search, describe, readViaJina, setFetchForTests, resetForTests, parseDdgHtml, parseDdgLite, parseBingRss, parseJinaMarkdown, decodeDdgUrl, decodeBingUrl, decodeEntities, engines, cache, FREE_ENGINES };
+module.exports = { search, describe, readViaJina, relevantOnly, setFetchForTests, resetForTests, parseDdgHtml, parseDdgLite, parseBingRss, parseJinaMarkdown, decodeDdgUrl, decodeBingUrl, decodeEntities, engines, cache, FREE_ENGINES };

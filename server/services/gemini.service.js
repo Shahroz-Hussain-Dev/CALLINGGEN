@@ -114,38 +114,54 @@ class GeminiClient {
    * and fallback across the model chain on quota (429) / retired (404) models.
    * Returns { response, model }.
    */
+  /** Milliseconds left before this client's deadline (Infinity when none was set with setDeadline). */
+  remainingMs() { return this.deadline ? this.deadline - Date.now() : Infinity; }
+  setDeadline(ms) { this.deadline = Date.now() + ms; return this; }
+
   async generate(body, { models, timeoutMs, thinking = true, onModelSwitch } = {}) {
     const fullChain = models || [config.ai.gemini.model, ...config.ai.gemini.fallbackModels];
-    const now = Date.now();
-    let chain = fullChain.filter((m) => (quotaBlockedUntil.get(m) || 0) <= now);
-    if (!chain.length) chain = fullChain; // everything is cooling down: try anyway
+    const transient = new Set(); // models that failed with overload / network trouble during this call
     let lastErr = null;
-    for (let mi = 0; mi < chain.length; mi++) {
-      const model = chain[mi];
-      let mode = thinkingSupport.get(model) || 'level';
-      for (let attempt = 0; attempt <= config.ai.gemini.maxRetries; attempt++) {
-        const req = JSON.parse(JSON.stringify(body));
-        const tc = thinkingConfigFor(model, mode, thinking);
-        if (tc) { req.generationConfig = { ...(req.generationConfig || {}), thinkingConfig: tc }; }
-        try {
-          const response = await this.raw(model, req, { timeoutMs });
-          thinkingSupport.set(model, mode);
-          if (model !== fullChain[0] && onModelSwitch) onModelSwitch(model, lastErr);
-          return { response, model };
-        } catch (err) {
-          lastErr = err;
-          if (err.status === 400 && /thinking/i.test(err.message) && mode !== 'none') { mode = mode === 'level' ? 'budget' : 'none'; attempt--; continue; }
-          if (err.status === 503 || err.status === 500 || err.code === 'NETWORK' || err.status === 504) {
-            if (attempt < config.ai.gemini.maxRetries && err.status !== 504) { await sleep(Math.min(15000, 2500 * (attempt + 1))); continue; }
-            quotaBlockedUntil.set(model, Date.now() + config.ai.gemini.overloadCooldownMs); // overloaded / timing out: skip for a while
-            break;
+    for (let round = 0; ; round++) {
+      const now = Date.now();
+      let chain = fullChain.filter((m) => transient.has(m) || (quotaBlockedUntil.get(m) || 0) <= now);
+      if (!chain.length) chain = fullChain; // everything is cooling down: try anyway
+      transient.clear();
+      for (let mi = 0; mi < chain.length; mi++) {
+        const model = chain[mi];
+        let mode = thinkingSupport.get(model) || 'level';
+        for (let attempt = 0; attempt <= config.ai.gemini.maxRetries; attempt++) {
+          const left = this.remainingMs();
+          if (left < 15000) throw lastErr || new GeminiApiError(504, 'DEADLINE', 'Out of time before any Gemini model answered');
+          const req = JSON.parse(JSON.stringify(body));
+          const tc = thinkingConfigFor(model, mode, thinking);
+          if (tc) { req.generationConfig = { ...(req.generationConfig || {}), thinkingConfig: tc }; }
+          try {
+            const response = await this.raw(model, req, { timeoutMs: Math.max(10000, Math.min(timeoutMs || config.ai.gemini.timeoutMs, left - 3000)) });
+            thinkingSupport.set(model, mode);
+            if (model !== fullChain[0] && onModelSwitch) onModelSwitch(model, lastErr);
+            return { response, model };
+          } catch (err) {
+            lastErr = err;
+            if (err.status === 400 && /thinking/i.test(err.message) && mode !== 'none') { mode = mode === 'level' ? 'budget' : 'none'; attempt--; continue; }
+            if (err.status === 503 || err.status === 500 || err.code === 'NETWORK' || err.status === 504) {
+              if (attempt < config.ai.gemini.maxRetries && err.status !== 504 && this.remainingMs() > 30000) { await sleep(Math.min(15000, 2500 * (attempt + 1))); continue; }
+              quotaBlockedUntil.set(model, Date.now() + config.ai.gemini.overloadCooldownMs); // overloaded / timing out: skip for a while
+              transient.add(model);
+              break;
+            }
+            if (err.status === 429) { const cd = cooldownFor(err); quotaBlockedUntil.set(model, Date.now() + cd); if (cd <= config.ai.gemini.quotaCooldownMs) transient.add(model); break; } // next model in the chain
+            if (err.status === 404) { quotaBlockedUntil.set(model, Date.now() + 24 * 3600 * 1000); break; }
+            throw err;
           }
-          if (err.status === 429) { quotaBlockedUntil.set(model, Date.now() + cooldownFor(err)); break; } // next model in the chain
-          if (err.status === 404) { quotaBlockedUntil.set(model, Date.now() + 24 * 3600 * 1000); break; }
-          throw err;
         }
+        logger.warn('Gemini model unavailable, trying next in chain', { model, status: lastErr && lastErr.status, message: lastErr && String(lastErr.message).slice(0, 160) });
       }
-      logger.warn('Gemini model unavailable, trying next in chain', { model, status: lastErr && lastErr.status, message: lastErr && String(lastErr.message).slice(0, 160) });
+      // Every model failed. When the failures were transient (high demand, per-minute quota, network), wait and sweep the chain again.
+      const wait = config.ai.gemini.overloadRoundWaitMs;
+      if (!transient.size || round >= config.ai.gemini.overloadRounds || this.remainingMs() < wait + 25000) break;
+      logger.warn('All Gemini models unavailable, waiting before another round', { round: round + 1, models: [...transient], wait_ms: wait });
+      await sleep(wait);
     }
     throw lastErr || new GeminiApiError(503, 'UNAVAILABLE', 'No Gemini model responded');
   }
@@ -340,7 +356,7 @@ function useEvidenceMode(webSearch) {
 /** Lead generation from server-gathered evidence: one JSON call per batch. */
 async function generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage }) {
   const niche = niches[0];
-  const ev = await evidence.gather({ panel, niche, city });
+  const ev = await evidence.gather({ panel, niche, city, timeBudgetMs: Math.max(15000, Math.min(config.evidence.timeBudgetMs, client.remainingMs() - 90000)) });
   const rendered = evidence.render(ev);
   const userText = `${prompts.buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled: true }).replace(/Return the leads by calling submit_leads once\./, '').replace(/Web search is available: use it to find and confirm each business before including it\./, 'Use ONLY the evidence below.')}
 
@@ -373,8 +389,9 @@ Return the JSON now (search_notes: say how many distinct qualifying businesses t
   return { leads, rejected, model, ev, notes, searchNotes: String(data.search_notes || '') };
 }
 
-async function generateLeadCandidates({ userId, panel, niches, city, count, excludeNames = [], webSearch = config.ai.gemini.webSearch }) {
+async function generateLeadCandidates({ userId, panel, niches, city, count, excludeNames = [], webSearch = config.ai.gemini.webSearch, timeBudgetMs = config.ai.gemini.batchDeadlineMs }) {
   const { client, source } = await getClientForUser(userId);
+  client.setDeadline(timeBudgetMs);
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, web_search_requests: 0 };
   const sources = new Set();
   const system = (panel === 'strategy' ? prompts.STRATEGY_SYSTEM : prompts.SERVICE_SYSTEM).replace(/web search/gi, 'Google Search').replace(/call the submit_leads tool exactly once with all leads\. Do not write the leads as plain text\./i, 'write the findings report described in the task.');

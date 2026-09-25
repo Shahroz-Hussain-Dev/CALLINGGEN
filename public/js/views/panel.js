@@ -121,6 +121,19 @@ export async function renderPanel(root, type) {
     setBusy(btn, true, 'Starting…');
     generating = true;
     let job = null, batch = null, error = null;
+    // Transient AI failures (model overloaded, per-minute quota, timeout) are retried automatically with a visible countdown.
+    const TRANSIENT = new Set(['ai_unavailable', 'ai_rate_limited', 'ai_timeout', 'ai_api_error', 'ai_bad_output']);
+    const RETRY_WAITS = [20, 40, 60];
+    let transientRetries = 0;
+    let retryPending = false;
+    const canRetry = (e) => TRANSIENT.has(e.code) && transientRetries < RETRY_WAITS.length;
+    async function waitBeforeRetry(e) {
+      const secs = RETRY_WAITS[transientRetries++];
+      for (let s = secs; s > 0 && alive && generating; s--) {
+        renderGenProgress(job, batch, `${e.message} Retrying automatically in ${s}s (attempt ${transientRetries} of ${RETRY_WAITS.length})…`);
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
     try {
       const r = await api.post('/api/leads/generate', { contact_type: type, niche_ids, count, run_first_batch: true });
       job = r.job; batch = r.batch;
@@ -128,15 +141,24 @@ export async function renderPanel(root, type) {
       view.selectedListId = r.list.id;
       renderLists(); renderContacts(); renderWorkflow();
     } catch (e) {
-      generating = false; error = e.message; job = e.details && e.details.job ? e.details.job : null;
+      job = e.details && e.details.job ? e.details.job : null;
       await reloadLists().catch(() => {});
-      renderGen(job, batch, error);
-      return;
+      if (job && job.list_id && canRetry(e)) {
+        view.selectedListId = job.list_id;
+        renderLists(); renderGen(job, batch, null);
+        await waitBeforeRetry(e);
+        retryPending = true;
+      } else {
+        generating = false; error = e.message;
+        renderGen(job, batch, error);
+        return;
+      }
     }
-    renderGen(job, batch, null);
+    if (!retryPending) renderGen(job, batch, null);
     // continue batches until done
     const listId = view.selectedListId;
-    while (alive && generating && job && ['pending', 'running'].includes(job.status)) {
+    while (alive && generating && job && (['pending', 'running'].includes(job.status) || retryPending)) {
+      retryPending = false;
       try {
         const r = await api.post(`/api/lists/${listId}/generate`, {});
         job = r.job; batch = r.batch;
@@ -144,7 +166,9 @@ export async function renderPanel(root, type) {
         await reloadLists(); renderContacts();
       } catch (e) {
         if (e.code === 'conflict' || (e.details && e.details.code === 'generation_busy')) { await new Promise((r) => setTimeout(r, 4000)); continue; }
-        error = e.message; job = e.details && e.details.job ? e.details.job : job; break;
+        job = e.details && e.details.job ? e.details.job : job;
+        if (canRetry(e)) { await waitBeforeRetry(e); retryPending = generating; continue; }
+        error = e.message; break;
       }
     }
     generating = false;

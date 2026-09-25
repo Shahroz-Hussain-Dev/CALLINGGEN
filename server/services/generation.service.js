@@ -146,7 +146,7 @@ function pickCityAndNiche(job, list, cities) {
 }
 
 /** Runs a single batch for a job. Returns the updated job view plus batch summary. */
-async function runBatch(user, jobId, { forceUnlock = false } = {}) {
+async function runBatch(user, jobId, { forceUnlock = false, timeBudgetMs } = {}) {
   const id = v.uuid(jobId, { field: 'job_id' });
   const all = await settings.getAll();
   const batchSize = Math.max(1, Math.min(15, Number(all.generation_batch_size) || config.generation.batchSize));
@@ -193,7 +193,7 @@ async function runBatch(user, jobId, { forceUnlock = false } = {}) {
   const summary = { requested: count, received: 0, saved: 0, duplicates: 0, rejected: 0, needs_verification: 0, verified: 0, niche: nicheNames.join(', '), city, web_search_used: false, search_notes: '', model: null, provider: ai.activeName(), errors: [] };
   let generated;
   try {
-    generated = await ai.generateLeadCandidates({ userId: user.role === 'owner' && job.current_owner_id !== user.id ? job.current_owner_id : user.id, panel: job.contact_type, niches: nicheNames, city, count, excludeNames });
+    generated = await ai.generateLeadCandidates({ userId: user.role === 'owner' && job.current_owner_id !== user.id ? job.current_owner_id : user.id, panel: job.contact_type, niches: nicheNames, city, count, excludeNames, ...(timeBudgetMs ? { timeBudgetMs } : {}) });
   } catch (err) {
     const mapped = ai.mapError(err);
     logger.warn('Lead generation batch failed', { jobId: id, code: mapped.code, message: mapped.message });
@@ -343,7 +343,7 @@ async function continuePending({ timeBudgetMs = config.generation.timeBudgetMs, 
   for (const r of rows) {
     if (Date.now() - started > timeBudgetMs) break;
     try {
-      const res = await runBatch(actor || { id: r.user_id, role: r.role, display_name: r.display_name }, r.id);
+      const res = await runBatch(actor || { id: r.user_id, role: r.role, display_name: r.display_name }, r.id, { timeBudgetMs: Math.max(60000, timeBudgetMs - (Date.now() - started)) });
       results.push({ job_id: r.id, status: res.job.status, saved: res.batch ? res.batch.saved : 0 });
     } catch (err) {
       results.push({ job_id: r.id, error: err.code || err.message });

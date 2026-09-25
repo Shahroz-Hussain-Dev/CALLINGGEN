@@ -85,8 +85,20 @@ async function fetchPage(url, { jinaFallback } = {}) {
   }
 }
 
+const gatherCache = new Map(); // panel|niche|city -> { at, ev }: a retried batch (model overloaded) reuses its evidence
+const GATHER_CACHE_MS = 10 * 60 * 1000;
+function clearCacheForTests() { gatherCache.clear(); }
+
 /** Gathers evidence for one niche/city. Returns { queries, results, pages, corpus, phones, urls, elapsed_ms }. */
 async function gather({ panel, niche, city, timeBudgetMs = config.evidence.timeBudgetMs, maxPages = config.evidence.maxPages }) {
+  const cacheKey = `${panel}|${niche}|${city}`;
+  const hit = gatherCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < GATHER_CACHE_MS) return { ...hit.ev, cached: true };
+  const ev = await gatherUncached({ panel, niche, city, timeBudgetMs, maxPages });
+  if (ev.results.length) gatherCache.set(cacheKey, { at: Date.now(), ev });
+  return ev;
+}
+async function gatherUncached({ panel, niche, city, timeBudgetMs, maxPages }) {
   const started = Date.now();
   const queries = buildQueries({ panel, niche, city });
   const seen = new Map(); // url -> result
@@ -238,4 +250,4 @@ async function gatherForBusiness({ name, city, timeBudgetMs = config.evidence.ti
   return { queries, results, pages, corpus, phones, urls, elapsed_ms: Date.now() - started };
 }
 
-module.exports = { gather, gatherForBusiness, render, verifyLead, buildQueries, extractFacts, htmlToText, fetchPage, fetchPageViaJina, setFetchForTests, nameInCorpus };
+module.exports = { gather, gatherForBusiness, render, verifyLead, buildQueries, extractFacts, htmlToText, fetchPage, fetchPageViaJina, setFetchForTests, clearCacheForTests, nameInCorpus };

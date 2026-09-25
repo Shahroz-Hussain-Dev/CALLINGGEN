@@ -63,6 +63,9 @@ const config = {
       timeoutMs: int(env.GEMINI_TIMEOUT_MS, 170000),
       maxRetries: int(env.GEMINI_MAX_RETRIES, 2),
       overloadCooldownMs: int(env.GEMINI_OVERLOAD_COOLDOWN_MS, 120 * 1000),
+      overloadRounds: int(env.GEMINI_OVERLOAD_ROUNDS, 2), // extra passes over the model chain when every model is overloaded
+      overloadRoundWaitMs: int(env.GEMINI_OVERLOAD_ROUND_WAIT_MS, 12000),
+      batchDeadlineMs: int(env.GEMINI_BATCH_DEADLINE_MS, 240000), // one lead batch (research + model) must finish within this; keep under the function maxDuration
       evidenceTimeoutMs: int(env.GEMINI_EVIDENCE_TIMEOUT_MS, 120000),
       evidenceThinking: env.GEMINI_EVIDENCE_THINKING || 'medium', // thinking level for evidence-mode extraction
       maxOutputTokens: int(env.GEMINI_MAX_OUTPUT_TOKENS, 65536),

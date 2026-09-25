@@ -8,6 +8,7 @@ process.env.GEMINI_MAX_RETRIES = '1';
 const { test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const gemini = require('../server/services/gemini.service');
+const config = require('../server/config');
 const apiKeys = require('../server/services/apiKeys.service');
 require('../server/services/settings.service').getWebSearchKeys = async () => ({}); // no database in these unit tests
 
@@ -86,6 +87,31 @@ test('falls back to the next model on quota (429) and retired (404) models, retr
     assert.equal(seen[0], 'gemini-test-pro', 'primary tried first');
     assert.ok(seen.filter((x) => x.startsWith('gemini-test-flash')).length >= 2, 'retried after 503');
   } finally { apiKeys.resolveKeyForUser = origResolve; gemini.setFetchForTests(null); }
+});
+
+test('sweeps the whole model chain again after a pause when every model is overloaded', async () => {
+  const origResolve = apiKeys.resolveKeyForUser; apiKeys.resolveKeyForUser = serverKey;
+  const orig = { retries: config.ai.gemini.maxRetries, wait: config.ai.gemini.overloadRoundWaitMs, rounds: config.ai.gemini.overloadRounds };
+  config.ai.gemini.maxRetries = 0; config.ai.gemini.overloadRoundWaitMs = 20; config.ai.gemini.overloadRounds = 2;
+  const seen = [];
+  fakeFetch(async ({ model }) => {
+    seen.push(model);
+    if (seen.length <= 3) return { status: 503, json: { error: { code: 503, status: 'UNAVAILABLE', message: 'high demand' } } }; // round 1: all three models busy
+    if (model === 'gemini-test-pro') return { status: 503, json: { error: { code: 503, status: 'UNAVAILABLE', message: 'high demand' } } };
+    return { json: textResponse('OK') };
+  });
+  try {
+    const r = await gemini.testConnection('u');
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.model, 'gemini-test-flash');
+    assert.deepEqual(seen, ['gemini-test-pro', 'gemini-test-flash', 'gemini-test-lite', 'gemini-test-pro', 'gemini-test-flash']);
+    gemini.resetQuotaMemoryForTests(); seen.length = 0;
+    fakeFetch(async ({ model }) => { seen.push(model); return { status: 503, json: { error: { code: 503, status: 'UNAVAILABLE', message: 'high demand' } } }; });
+    const bad = await gemini.testConnection('u');
+    assert.equal(bad.ok, false);
+    assert.equal(seen.length, 9, 'three rounds over three models, then give up');
+    assert.equal(bad.error.code, 'ai_unavailable');
+  } finally { apiKeys.resolveKeyForUser = origResolve; gemini.setFetchForTests(null); Object.assign(config.ai.gemini, { maxRetries: orig.retries, overloadRoundWaitMs: orig.wait, overloadRounds: orig.rounds }); }
 });
 
 test('maps API errors to clear user-facing messages', async () => {

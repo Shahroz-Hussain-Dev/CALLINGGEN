@@ -88,6 +88,8 @@ test('parses search result pages rendered by Jina Reader (DuckDuckGo Lite and Bi
   assert.deepEqual(bing.map((r) => r.url), ['https://manamstudioandsalon.com/', 'https://irambeautysalon.com/bridal-makeup-lahore/']);
   assert.equal(bing[0].title, 'Manam Studio — Makeup Studio & Salon | Lahore');
   assert.match(bing[0].snippet, /994 Ravi Block/);
+  const unrelated = [{ title: 'Shopify Community', url: 'https://community.shopify.com/', snippet: 'Merchants and Partners' }, ...bing];
+  assert.deepEqual(websearch.relevantOnly(unrelated, 'bridal makeup studio Lahore').map((r) => r.url), bing.map((r) => r.url), 'results sharing no word with the query are dropped');
 });
 
 test('jina_reader engine answers when direct engines are blocked, and backs off on a Jina 429', async () => {

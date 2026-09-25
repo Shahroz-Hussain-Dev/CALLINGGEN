@@ -31,6 +31,8 @@ to the browser.
 | `GEMINI_TEMPERATURE` | no | Default `0.2` (factual). |
 | `GEMINI_TIMEOUT_MS` | no | Per-request timeout (default 170000; keep below the function `maxDuration`). |
 | `GEMINI_MAX_RETRIES` | no | Retries on "high demand" (503) per model (default 3). |
+| `GEMINI_OVERLOAD_ROUNDS` | no | Extra sweeps over the whole model chain when every model was overloaded or per-minute rate-limited (default 2), separated by `GEMINI_OVERLOAD_ROUND_WAIT_MS` (default 12000). |
+| `GEMINI_BATCH_DEADLINE_MS` | no | Time budget for one lead batch including web research (default 240000). Model calls and retry rounds stop before it so the serverless function never times out. |
 | `GEMINI_MAX_OUTPUT_TOKENS` | no | Default 16384. |
 
 ## Anthropic Claude (AI_PROVIDER=anthropic)
