@@ -342,6 +342,7 @@ EVIDENCE MODE: You are given EVIDENCE gathered by our own web searches (search r
 - Every business you return must appear in the evidence (by name), and every phone number, WhatsApp number, email, website, address, social profile URL and person name must be copied exactly from the evidence. If a value is not in the evidence, use null.
 - Put the evidence URLs where each fact appears into source_urls. Set field_verification to "verified" for values copied from the evidence, "estimated" for inferences (size, opportunities), "unknown" otherwise.
 - Directory pages (e.g. listing sites) often show many businesses with their phone numbers: extract each business separately.
+- This list is for phone outreach: prefer businesses whose phone or WhatsApp number appears in the evidence and list them first; include a business without any number only when the evidence does not hold enough qualifying businesses with numbers.
 - Prefer businesses that match the niche and city and the panel qualification rules; skip businesses that clearly fail them (for the Strategy panel: skip businesses whose own official website with online booking is in the evidence).
 - Return up to the requested number of leads. Fewer is fine; never invent.`;
 
@@ -386,6 +387,23 @@ Return the JSON now (search_notes: say how many distinct qualifying businesses t
     if (v.changes.length) notes.push(`${v.lead.business_name}: ${v.changes.join('; ')}`);
     leads.push(v.lead);
   }
+  // Follow-up lookups: a lead that is verified but has no number gets one targeted search for its phone.
+  let lookups = 0;
+  for (const lead of leads) {
+    if (lead.phone || lead.whatsapp || lookups >= config.evidence.phoneLookups || client.remainingMs() < 40000) continue;
+    lookups++;
+    try {
+      const found = await evidence.findPhoneFor({ name: lead.business_name, city: lead.city || city });
+      if (!found) continue;
+      lead.phone = found.phone;
+      lead.field_verification = { ...(lead.field_verification || {}), phone: 'verified' };
+      if (found.source_url && !(lead.source_urls || []).includes(found.source_url)) lead.source_urls = [...(lead.source_urls || []), found.source_url];
+      lead.confidence = 'verified';
+      notes.push(`${lead.business_name}: phone ${found.phone} found by follow-up search (${found.source_url})`);
+    } catch (err) { logger.warn('Phone lookup failed', { name: lead.business_name, error: err.message }); }
+  }
+  usage.web_search_requests += lookups;
+  leads.sort((a, b) => (b.phone || b.whatsapp ? 1 : 0) - (a.phone || a.whatsapp ? 1 : 0));
   return { leads, rejected, model, ev, notes, searchNotes: String(data.search_notes || '') };
 }
 

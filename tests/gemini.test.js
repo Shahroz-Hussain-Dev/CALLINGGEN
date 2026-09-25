@@ -185,10 +185,12 @@ test('evidence mode: one JSON call grounded in server-gathered evidence, with se
     assert.match(body.contents[0].parts[0].text, /===== EVIDENCE =====/);
     assert.match(body.systemInstruction.parts[0].text, /EVIDENCE MODE/);
     return { json: textResponse(JSON.stringify({ search_notes: 'two candidates', leads: [
-      { business_name: 'Glow Studio', city: 'Lahore', phone: '0300-1234567', social_profiles: { instagram: 'https://instagram.com/glowstudio.pk' }, source_urls: ['https://instagram.com/glowstudio.pk'] },
+      { business_name: 'Glow Studio', city: 'Lahore', phone: '0300-9999999', social_profiles: { instagram: 'https://instagram.com/glowstudio.pk' }, source_urls: ['https://instagram.com/glowstudio.pk'] },
       { business_name: 'Imaginary Salon', city: 'Lahore', phone: '0300-0000000', social_profiles: {}, source_urls: [] },
     ] })) };
   });
+  const origFind = evidence.findPhoneFor; const lookups = [];
+  evidence.findPhoneFor = async ({ name, city }) => { lookups.push(`${name}|${city}`); return { phone: '0300-1234567', normalized: '923001234567', source_url: 'https://instagram.com/glowstudio.pk', snippet: 'WhatsApp 0300-1234567' }; };
   try {
     const r = await gemini.generateLeadCandidates({ userId: 'u', panel: 'strategy', niches: ['Bridal Makeup Studios'], city: 'Lahore', count: 5, webSearch: true });
     assert.equal(calls.length, 1, 'a single model call per batch');
@@ -196,10 +198,13 @@ test('evidence mode: one JSON call grounded in server-gathered evidence, with se
     assert.equal(r.webSearchUsed, true);
     assert.equal(r.leads.length, 1);
     assert.equal(r.leads[0].business_name, 'Glow Studio');
+    assert.deepEqual(lookups, ['Glow Studio|Lahore'], 'the invented phone was stripped, then one follow-up lookup ran');
+    assert.equal(r.leads[0].phone, '0300-1234567');
     assert.equal(r.leads[0].field_verification.phone, 'verified');
+    assert.equal(r.leads[0].confidence, 'verified');
     assert.deepEqual(r.rejected, [{ business_name: 'Imaginary Salon', reason: 'not_in_evidence' }]);
-    assert.equal(r.usage.web_search_requests, 2);
-  } finally { apiKeys.resolveKeyForUser = origResolve; gemini.setFetchForTests(null); evidence.gather = origGather; config.ai.gemini.researchMode = origMode; }
+    assert.equal(r.usage.web_search_requests, 3, "two evidence searches + one phone lookup");
+  } finally { apiKeys.resolveKeyForUser = origResolve; gemini.setFetchForTests(null); evidence.gather = origGather; evidence.findPhoneFor = origFind; config.ai.gemini.researchMode = origMode; }
 });
 
 test('per-day quota errors cool a model down until the Pacific-time reset; per-minute ones for about a minute', () => {

@@ -154,6 +154,31 @@ function render(ev, { maxChars = config.evidence.maxPromptChars } = {}) {
   return out;
 }
 
+/**
+ * Follow-up lookup for a verified lead without a phone number: one search for the business itself,
+ * phones taken only from results that name the business. Returns { phone, source_url, snippet } or null.
+ */
+async function findPhoneFor({ name, city }) {
+  const n = norm.normalizeBusinessName(name);
+  if (!n) return null;
+  const results = await websearch.search(`"${name}" ${city} contact number`, { count: 8 });
+  const tally = new Map(); // normalized phone -> { count, raw, url, snippet }
+  for (const r of results) {
+    const text = `${r.title} ${r.snippet}`;
+    if (!nameInCorpus(name, norm.normalizeBusinessName(text) + ' ' + text.toLowerCase())) continue;
+    for (const m of text.matchAll(PHONE_RE)) {
+      const key = norm.normalizePhone(m[0]);
+      if (!key) continue;
+      const t = tally.get(key) || { count: 0, raw: m[0].trim(), url: r.url, snippet: r.snippet };
+      t.count++;
+      tally.set(key, t);
+    }
+  }
+  if (!tally.size) return null;
+  const best = [...tally.values()].sort((a, b) => b.count - a.count)[0];
+  return { phone: best.raw, normalized: [...tally.entries()].find(([, v]) => v === best)[0], source_url: best.url, snippet: best.snippet };
+}
+
 function nameInCorpus(name, corpus) {
   const n = norm.normalizeBusinessName(name);
   if (!n) return false;
@@ -250,4 +275,4 @@ async function gatherForBusiness({ name, city, timeBudgetMs = config.evidence.ti
   return { queries, results, pages, corpus, phones, urls, elapsed_ms: Date.now() - started };
 }
 
-module.exports = { gather, gatherForBusiness, render, verifyLead, buildQueries, extractFacts, htmlToText, fetchPage, fetchPageViaJina, setFetchForTests, clearCacheForTests, nameInCorpus };
+module.exports = { gather, gatherForBusiness, render, verifyLead, buildQueries, extractFacts, htmlToText, fetchPage, fetchPageViaJina, findPhoneFor, setFetchForTests, clearCacheForTests, nameInCorpus };

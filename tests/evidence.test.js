@@ -155,6 +155,19 @@ test('fetchPage falls back to Jina Reader when a site blocks direct fetches', as
   } finally { websearch.setFetchForTests(null); evidence.setFetchForTests(null); websearch.resetForTests(); }
 });
 
+test('findPhoneFor takes a phone only from results that name the business', async () => {
+  websearch.resetForTests();
+  websearch.setFetchForTests(async () => ({ status: 200, text: async () => DDG_HTML.replace('Top salons with phone numbers', 'Other Parlour Lahore call 0345-9998887') }));
+  try {
+    const found = await evidence.findPhoneFor({ name: 'Glow Studio', city: 'Lahore' });
+    assert.ok(found, 'phone found');
+    assert.equal(found.phone, '0300-1234567');
+    assert.equal(found.normalized, '923001234567');
+    assert.equal(found.source_url, 'https://www.instagram.com/glowstudio.pk/');
+    assert.equal(await evidence.findPhoneFor({ name: 'Nowhere Salon', city: 'Lahore' }), null, 'no phone borrowed from another business');
+  } finally { websearch.setFetchForTests(null); websearch.resetForTests(); }
+});
+
 test('extracts Pakistani phone numbers, emails and social links from page text', () => {
   const f = evidence.extractFacts('Call 0300-1234567 or +92 42 35761234, WhatsApp 0321 7654321. mail: hello@glow.pk https://www.instagram.com/glowstudio.pk/ https://wa.me/923001234567');
   assert.ok(f.phones.includes('923001234567'));

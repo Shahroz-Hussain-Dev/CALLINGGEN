@@ -107,6 +107,7 @@ const config = {
     maxPageChars: int(env.EVIDENCE_MAX_PAGE_CHARS, 4500),
     maxPromptChars: int(env.EVIDENCE_MAX_PROMPT_CHARS, 36000),
     jinaPageFallbacks: int(env.EVIDENCE_JINA_PAGE_FALLBACKS, 3), // pages re-read through Jina Reader when a site blocks direct fetches
+    phoneLookups: int(env.EVIDENCE_PHONE_LOOKUPS, 5), // follow-up searches per batch for verified leads that still lack a phone number
   },
 
   search: {
