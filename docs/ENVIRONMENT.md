@@ -12,7 +12,26 @@ to the browser.
 | `DATABASE_POOL_MAX` | no | Pool size per process (default 3 on Vercel, 10 locally). |
 | `TEST_DATABASE_URL` | tests | Separate disposable database for `npm test`. |
 
-## Claude API
+## AI provider
+| Variable | Required | Description |
+|---|---|---|
+| `AI_PROVIDER` | no | `gemini` (default when `GEMINI_API_KEY` is set) or `anthropic`. |
+
+## Google Gemini
+| Variable | Required | Description |
+|---|---|---|
+| `GEMINI_API_KEY` | yes for Gemini | Gemini Developer API key from Google AI Studio (`AIza…` or `AQ.…`). Users may also store personal keys (encrypted). |
+| `GEMINI_MODEL` | no | Primary model, default `gemini-3.1-pro-preview` (best quality; needs a billed key). |
+| `GEMINI_FALLBACK_MODELS` | no | Comma-separated chain tried automatically when a model is unavailable on the key's tier. Default `gemini-3.8-flash,gemini-flash-latest,gemini-3.5-flash,gemini-3.1-flash-lite`. |
+| `GEMINI_WEB_SEARCH` | no | `true` (default): research uses Google Search grounding and cites sources. Free-tier keys have no grounding quota; the app then falls back to ungrounded research and marks leads *Needs Verification*. |
+| `GEMINI_URL_CONTEXT` | no | `true` (default): lets the model open pages it finds to confirm details. |
+| `GEMINI_THINKING` | no | `high` (default) / `medium` / `low` / `off`. |
+| `GEMINI_TEMPERATURE` | no | Default `0.2` (factual). |
+| `GEMINI_TIMEOUT_MS` | no | Per-request timeout (default 170000; keep below the function `maxDuration`). |
+| `GEMINI_MAX_RETRIES` | no | Retries on "high demand" (503) per model (default 3). |
+| `GEMINI_MAX_OUTPUT_TOKENS` | no | Default 16384. |
+
+## Anthropic Claude (AI_PROVIDER=anthropic)
 | Variable | Required | Description |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | recommended | Server-wide key. Users may also store personal keys (encrypted). |

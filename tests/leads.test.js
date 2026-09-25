@@ -30,7 +30,7 @@ test('generates leads through Claude, saves verified fields and source URLs, and
   assert.equal(rows[0].normalized_phone.startsWith('92300'), true);
   assert.equal(rows[0].field_verification.phone, 'verified');
   assert.equal(rows[0].current_owner_id, amman.user.id);
-  assert.equal(rows[0].generation_source, 'claude+web_search');
+  assert.equal(rows[0].generation_source, 'anthropic+web_search');
   // a social page passed as "website" is moved to social profiles, not stored as a website
   assert.equal(rows[1].website, null);
   assert.equal(rows[1].normalized_website_domain, null);

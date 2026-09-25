@@ -27,7 +27,7 @@ app.get('/api/health', async (req, res) => {
 });
 
 app.use('/api', require('./routes/auth.routes'));
-app.use('/api', require('./routes/claude.routes'));
+app.use('/api', require('./routes/ai.routes'));
 app.use('/api', require('./routes/leads.routes'));
 app.use('/api', require('./routes/lists.routes'));
 app.use('/api', require('./routes/rotation.routes'));

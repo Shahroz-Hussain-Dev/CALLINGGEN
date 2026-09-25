@@ -97,7 +97,7 @@ export async function renderContactDetail(root, id) {
         <div class="card"><div class="card-head"><h2>10 · Rotation history</h2></div>
           ${data.rotation_history.length ? html`<div class="timeline">${join(data.rotation_history, (h) => html`<div class="timeline-item"><div><b>${h.event_type === 'completed' ? 'List completed' : h.event_type === 'manual_transfer' ? 'Manual transfer' : 'Rotated'}</b>: ${h.previous_owner_name} → ${h.new_owner_name || 'archive'} <span class="muted small">(${h.list_code}, cycle ${h.cycle_number})</span></div><div class="when">${fmtDateTime(h.rotation_date)}</div></div>`)}</div>` : raw('<div class="muted small">This list has not rotated yet. It was created for ' + esc(c.original_owner_name || '') + '.</div>')}
         </div>
-        <div class="card"><div class="card-head"><h2>Claude research & meeting preparation</h2><div class="flex"><button class="btn sm ${type}" id="researchBtn">${type === 'service' ? 'Prepare meeting profile' : 'Analyse booking need'}</button>${type === 'service' ? raw('<label class="check small"><input type="checkbox" id="rWeb" checked> web search</label>') : raw('')}</div></div>
+        <div class="card"><div class="card-head"><h2>AI research & meeting preparation</h2><div class="flex"><button class="btn sm ${type}" id="researchBtn">${type === 'service' ? 'Prepare meeting profile' : 'Analyse booking need'}</button>${type === 'service' ? raw('<label class="check small"><input type="checkbox" id="rWeb" checked> web research</label>') : raw('')}</div></div>
           <div class="small muted">${type === 'service' ? 'Generates a business profile (services, team size estimate, departments, processes, repetitive tasks) and a customized automation proposal outline from the record and call history.' : 'Summarises the booking process learned so far, the real problems, whether a website or booking system is genuinely needed, and how to introduce LATechS.'} Estimates are marked; nothing is invented.</div>
           <div id="researchOut">${data.research.length ? raw(data.research.map(researchHtml).join('')) : raw('<div class="muted small mt-2">No research generated yet.</div>')}</div>
         </div>
@@ -109,7 +109,7 @@ export async function renderContactDetail(root, id) {
   root.querySelectorAll('[data-fu]').forEach((b) => b.addEventListener('click', async () => { try { await api.patch(`/api/follow-ups/${b.dataset.fu}`, { status: b.dataset.s }); toast('Follow-up updated', 'success'); reload(); } catch (er) { toast(er.message, 'error'); } }));
   root.querySelectorAll('[data-m]').forEach((tr) => tr.addEventListener('click', () => { const m = data.meetings.find((x) => x.id === tr.dataset.m); if (m) meetingDetailsModal({ ...m, can_manage: state.user.role === 'owner' || m.meeting_owner_id === state.user.id, created_by_name: m.created_by_name || '' }, reload); }));
   root.querySelector('#researchBtn').addEventListener('click', async (e) => {
-    const btn = e.target; setBusy(btn, true, 'Researching with Claude… this can take a minute');
+    const btn = e.target; setBusy(btn, true, 'Researching… this can take a minute or two');
     const out = root.querySelector('#researchOut');
     try {
       const webEl = root.querySelector('#rWeb');

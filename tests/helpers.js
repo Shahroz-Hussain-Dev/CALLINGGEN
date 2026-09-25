@@ -9,6 +9,7 @@ if (!process.env.TEST_DATABASE_URL) throw new Error('TEST_DATABASE_URL must poin
 process.env.APP_ENCRYPTION_KEY = process.env.APP_ENCRYPTION_KEY || 'test-encryption-key';
 process.env.CRON_SECRET = 'test-cron-secret';
 process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key-not-real-0000000000000';
+process.env.AI_PROVIDER = 'anthropic'; // the integration suite drives the fake Anthropic client; Gemini has its own unit tests
 process.env.LOG_LEVEL = 'error';
 
 const db = require('../server/db');

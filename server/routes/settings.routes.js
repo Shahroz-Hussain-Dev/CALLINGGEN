@@ -4,6 +4,7 @@ const { requireAuth, requireOwner } = require('../middleware/auth');
 const settings = require('../services/settings.service');
 const apiKeys = require('../services/apiKeys.service');
 const search = require('../services/search');
+const ai = require('../services/ai.service');
 const db = require('../db');
 const config = require('../config');
 const cycle = require('../services/cycle.service');
@@ -13,8 +14,9 @@ router.use('/settings', requireAuth);
 
 router.get('/settings', async (req, res) => {
   const userSettings = await settings.getUserSettings(req.user.id);
-  const claude = await apiKeys.getStatus(req.user.id);
-  const out = { user: req.user, user_settings: userSettings, claude: { ...claude, search: search.describe() } };
+  const aiStatus = await apiKeys.getStatus(req.user.id);
+  const out = { user: req.user, user_settings: userSettings, ai: { ...aiStatus, ...ai.describe(), search: search.describe() } };
+  out.claude = out.ai; // backward compatibility
   if (req.user.role === 'owner') out.system = await settings.getAll();
   res.json(out);
 });
@@ -37,7 +39,7 @@ router.get('/settings/system/status', requireOwner, async (req, res) => {
   const all = await settings.getAll();
   res.json({
     database, counts, generation_jobs: jobs, cycle: cycle.describe(state, all),
-    environment: { node: process.version, vercel: !!process.env.VERCEL, region: process.env.VERCEL_REGION || null, claude_model: config.claude.model, claude_web_search: config.claude.webSearch, server_key_configured: !!config.claude.apiKey, encryption_configured: !!config.security.encryptionKey, cron_secret_configured: !!config.security.cronSecret, search_provider: search.describe() },
+    environment: { node: process.version, vercel: !!process.env.VERCEL, region: process.env.VERCEL_REGION || null, ai_provider: ai.activeName(), ai_model: ai.describe().model, ai_fallback_models: ai.describe().fallback_models || [], ai_web_search: ai.describe().web_search, server_key_configured: ai.describe().server_key_configured, encryption_configured: !!config.security.encryptionKey, cron_secret_configured: !!config.security.cronSecret, search_provider: search.describe() },
   });
 });
 

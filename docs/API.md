@@ -12,13 +12,13 @@ Errors have the shape `{ "error": { "code": "...", "message": "...", "details": 
 | GET | `/me` | Current user, cycle status, app info. |
 | POST | `/me/password` | `{current_password, new_password}`. |
 
-## Claude
+## AI (also available under the legacy `/claude/*` paths)
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/claude/status` | Key source (user/server/none), masked last-4, model, web search + provider status. |
-| POST | `/claude/test` | Sends a tiny request with the active key → `{ok, model, latency_ms}` or `{ok:false, error}`. |
-| POST | `/claude/key` | `{api_key}` – stored encrypted; returns status. |
-| DELETE | `/claude/key` | Removes the personal key. |
+| GET | `/ai/status` | Key source (user/server/none), masked last-4, model, web search + provider status. |
+| POST | `/ai/test` | Sends a tiny request with the active key → `{ok, model, latency_ms}` or `{ok:false, error}`. |
+| POST | `/ai/key` | `{api_key, provider?}` – stored encrypted; returns status. |
+| DELETE | `/ai/key` | Removes the personal key. |
 
 ## Leads (contacts)
 | Method | Path | Notes |

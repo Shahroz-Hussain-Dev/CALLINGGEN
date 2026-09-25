@@ -14,7 +14,7 @@ const norm = require('../lib/normalize');
 const { randomToken } = require('../lib/crypto');
 const activity = require('./activity.service');
 const settings = require('./settings.service');
-const claude = require('./claude.service');
+const ai = require('./ai.service');
 const duplicates = require('./duplicates.service');
 const search = require('./search');
 const listsService = require('./lists.service');
@@ -190,12 +190,12 @@ async function runBatch(user, jobId, { forceUnlock = false } = {}) {
   const { rows: rejected } = await db.query('SELECT business_name FROM generation_rejections WHERE job_id = $1 ORDER BY created_at DESC LIMIT 60', [id]);
   const excludeNames = [...new Set([...known.map((r) => r.business_name), ...rejected.map((r) => r.business_name)])];
 
-  const summary = { requested: count, received: 0, saved: 0, duplicates: 0, rejected: 0, needs_verification: 0, verified: 0, niche: nicheNames.join(', '), city, web_search_used: false, search_notes: '', errors: [] };
+  const summary = { requested: count, received: 0, saved: 0, duplicates: 0, rejected: 0, needs_verification: 0, verified: 0, niche: nicheNames.join(', '), city, web_search_used: false, search_notes: '', model: null, provider: ai.activeName(), errors: [] };
   let generated;
   try {
-    generated = await claude.generateLeadCandidates({ userId: user.role === 'owner' && job.current_owner_id !== user.id ? job.current_owner_id : user.id, panel: job.contact_type, niches: nicheNames, city, count, excludeNames });
+    generated = await ai.generateLeadCandidates({ userId: user.role === 'owner' && job.current_owner_id !== user.id ? job.current_owner_id : user.id, panel: job.contact_type, niches: nicheNames, city, count, excludeNames });
   } catch (err) {
-    const mapped = claude.mapError(err);
+    const mapped = ai.mapError(err);
     logger.warn('Lead generation batch failed', { jobId: id, code: mapped.code, message: mapped.message });
     await db.query("UPDATE generation_jobs SET status = 'failed', last_error = $2, attempts = attempts + 1, last_batch_at = now(), locked_at = NULL, lock_token = NULL WHERE id = $1", [id, `${mapped.code}: ${mapped.message}`.slice(0, 500)]);
     await syncListProgress(job.list_id);
@@ -205,6 +205,8 @@ async function runBatch(user, jobId, { forceUnlock = false } = {}) {
   }
   summary.received = generated.leads.length;
   summary.web_search_used = generated.webSearchUsed;
+  summary.model = generated.model || null;
+  summary.warnings = generated.warnings || [];
   summary.search_notes = String(generated.searchNotes || '').slice(0, 1000);
   const provider = search.getProvider();
 
@@ -248,7 +250,7 @@ async function runBatch(user, jobId, { forceUnlock = false } = {}) {
           [c.business_name, c.normalized_business_name, c.industry, c.niche, c.niche_id, c.business_description, c.website, c.normalized_website_domain, c.website_available,
             c.phone, c.normalized_phone, c.public_email, c.address, c.city, c.country, JSON.stringify(c.social_profiles), c.company_size, c.employee_count_estimate, JSON.stringify(c.business_locations), JSON.stringify(c.departments),
             JSON.stringify(c.management_data), JSON.stringify(c.decision_makers), job.contact_type, job.list_id, job.current_owner_id, job.original_owner_id, JSON.stringify({ ...c.business_operations, provider_verification: c.provider_verification || null }), JSON.stringify(c.automation_opportunities),
-            dataStatus, JSON.stringify(c.field_verification), JSON.stringify([...new Set(c.source_urls)]), generated.webSearchUsed ? 'claude+web_search' : 'claude', id, c.qualification_notes ? `Qualification: ${c.qualification_notes}` : null],
+            dataStatus, JSON.stringify(c.field_verification), JSON.stringify([...new Set(c.source_urls)]), `${ai.activeName()}${generated.webSearchUsed ? '+web_search' : ''}`, id, c.qualification_notes ? `Qualification: ${c.qualification_notes}` : null],
         );
         if (!rows[0]) {
           await client.query('INSERT INTO generation_rejections (job_id, list_id, business_name, normalized_name, reason, details) VALUES ($1, $2, $3, $4, $5, $6)', [id, job.list_id, c.business_name, c.normalized_business_name, 'duplicate', JSON.stringify({ match_reason: 'unique_index' })]);
@@ -285,7 +287,7 @@ async function runBatch(user, jobId, { forceUnlock = false } = {}) {
     [id, have, summary.duplicates, summary.rejected, summary.needs_verification, summary.verified, emptyAttempts, newStatus],
   );
   await syncListProgress(job.list_id);
-  await activity.log('generation_batch', { userId: user.id, listId: job.list_id, details: { ...summary, errors: undefined, status: newStatus, usage: generated.usage } });
+  await activity.log('generation_batch', { userId: user.id, listId: job.list_id, details: { ...summary, errors: undefined, status: newStatus, usage: generated.usage, report_excerpt: generated.report ? String(generated.report).slice(0, 4000) : undefined } });
   if (newStatus === 'exhausted') await activity.log('generation_exhausted', { userId: user.id, listId: job.list_id, details: { have, requested: job.requested_count } });
   return { job: jobView(await getJob(id)), batch: summary };
 }

@@ -12,7 +12,7 @@ three-day list rotation with fresh list generation, and a full owner dashboard.
 | Frontend | Static HTML / CSS / JavaScript (ES modules, no build step) in `public/` |
 | API | Node.js + Express, deployed as one Vercel serverless function (`api/index.js`) |
 | Database | Supabase PostgreSQL (`pg`), versioned SQL migrations in `db/migrations/` |
-| AI | Claude API via the official `@anthropic-ai/sdk` (server-side only) |
+| AI | Google Gemini (Gemini Developer API, default) or Anthropic Claude — selected with `AI_PROVIDER`, server-side only |
 | Scheduler | Vercel Cron → `GET /api/rotation/cron` (protected by `CRON_SECRET`) |
 
 Everything sensitive (database credentials, Claude API keys, passwords, sessions) lives on the
@@ -37,7 +37,8 @@ npm run migrate
 
 # 5. Indexes and constraints are part of the migrations (nothing else to run)
 
-# 6. Configure Claude: set ANTHROPIC_API_KEY in .env (users may also add their own key in Settings)
+# 6. Configure the AI provider: set GEMINI_API_KEY (default provider) or ANTHROPIC_API_KEY with AI_PROVIDER=anthropic
+#    (users may also add their own key in Settings → AI configuration)
 
 # 7. (Optional) business/search data provider: LEAD_SEARCH_PROVIDER=serper + SERPER_API_KEY
 
@@ -70,13 +71,13 @@ See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for the step-by-step guide. Sum
 
 1. Push this repository to GitHub and import it in Vercel (framework preset: *Other*).
 2. Add the environment variables from `.env.example` (at minimum `DATABASE_URL`,
-   `ANTHROPIC_API_KEY`, `APP_ENCRYPTION_KEY`, `CRON_SECRET`, `NODE_ENV=production`).
+   `GEMINI_API_KEY` (or `ANTHROPIC_API_KEY` + `AI_PROVIDER=anthropic`), `APP_ENCRYPTION_KEY`, `CRON_SECRET`, `NODE_ENV=production`).
    Use the Supabase **transaction pooler** URL (port 6543) for `DATABASE_URL`.
 3. Run the migrations and seed once from your machine against the production database:
    `DATABASE_URL=<supabase url> npm run migrate && DATABASE_URL=<supabase url> npm run seed`.
 4. Deploy. `vercel.json` routes `/api/*` to the serverless API, serves `public/` as static
    files, and registers the daily rotation cron (`5 19 * * *` UTC = 00:05 Pakistan time).
-5. Sign in, open **Settings → Claude API → Test API connection**, then generate the first lists.
+5. Sign in, open **Settings → AI configuration → Test API connection**, then generate the first lists.
 
 ---
 
@@ -93,9 +94,13 @@ See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for the step-by-step guide. Sum
 ### Lead generation (Claude + verification + duplicate prevention)
 1. User selects niches and a number of contacts (≤ 50) and clicks **Generate Contacts**.
 2. The server creates (or continues) the user's list for the current cycle and a generation job.
-3. Each batch sends one request to Claude (`claude-opus-5` by default) with the panel rules and a
-   strict `submit_leads` tool schema. With `CLAUDE_WEB_SEARCH=true` Claude uses live web search and
-   must cite source URLs; without it, everything is marked *Needs Verification*.
+3. Each batch runs a two-phase research pipeline on Gemini (default `gemini-3.1-pro-preview`, with an
+   automatic fallback chain to the current Flash models when a model is unavailable on the key's tier):
+   a grounded research call (Google Search + URL reading, high thinking, low temperature) that writes an
+   evidence report with a URL for every fact, then a strict-JSON extraction call that may only restate
+   facts from the report. With the Anthropic provider the same rules apply through Claude's web search
+   and a strict `submit_leads` tool. Without web research (e.g. a free-tier Gemini key, which has no
+   grounding quota) leads are still produced but marked *Needs Verification* and a warning is shown.
 4. Every candidate is normalized (name, phone, domain, social handles), optionally verified through
    the pluggable business-data provider (`server/services/search/`), checked against the **entire
    database** (all employees, both panels, all history) using phone, website domain, name+city,
@@ -152,7 +157,7 @@ server/config.js             Environment-driven configuration (no secrets in cod
 server/db.js                 pg pool, transactions, health check
 server/lib/                  normalization, dates, validation, crypto, passwords, errors
 server/middleware/           auth (sessions), security headers + CSRF guard, error handler
-server/services/             auth, users, niches, settings, apiKeys, claude, search providers,
+server/services/             auth, users, niches, settings, apiKeys, ai (facade), gemini, claude, search providers,
                              duplicates, contacts, lists, generation, calls, followups, meetings,
                              rotation, cycle, analytics, activity
 server/prompts/              Claude prompts and JSON schemas (lead generation, analysis)
@@ -172,7 +177,7 @@ All routes are under `/api` and require a session unless noted. Full list in
 | Area | Routes |
 |---|---|
 | Auth | `POST /auth/login`, `POST /auth/logout`, `GET /me`, `POST /me/password` |
-| Claude | `GET /claude/status`, `POST /claude/test`, `POST /claude/key`, `DELETE /claude/key` |
+| AI | `GET /ai/status`, `POST /ai/test`, `POST /ai/key`, `DELETE /ai/key` (legacy aliases under `/claude/*`) |
 | Leads | `GET /leads`, `GET /leads/:id`, `POST /leads/generate`, `POST /leads/:id/call`, `POST /leads/:id/follow-up`, `POST /leads/:id/skip`, `PATCH /leads/:id/notes`, `POST /leads/:id/research` |
 | Lists | `GET /lists`, `GET /lists/:id`, `GET /lists/:id/next`, `POST /lists/generate`, `POST /lists/:id/generate`, `GET /generation/:jobId`, `POST /generation/:jobId/cancel` |
 | Rotation | `GET /rotation/status`, `GET /rotation/overview` (owner), `POST /rotation/run` (owner), `POST /rotation/transfer` (owner), `GET /rotation/cron` (CRON_SECRET) |
@@ -189,7 +194,7 @@ All routes are under `/api` and require a session unless noted. Full list in
 npm test
 ```
 
-30 integration tests run the real API against PostgreSQL with a fake Claude client (no network):
+30 integration tests run the real API against PostgreSQL with a fake AI client (no network), plus 6 Gemini provider unit tests:
 authentication and permissions, lead generation / duplicate rejection / verification fields /
 honest incomplete data / exhaustion, call recording and follow-ups, three-day rotation (timing,
 day-4 transfer, ownership, history preservation, incomplete lists, double-execution protection),

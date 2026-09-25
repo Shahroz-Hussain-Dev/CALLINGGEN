@@ -1,0 +1,359 @@
+'use strict';
+/**
+ * Google Gemini provider (Gemini Developer API, REST). Server-side only.
+ *
+ * Quality-first design:
+ *  - Research phase: Google Search grounding + URL context tools, high thinking, low temperature,
+ *    producing an evidence report with a URL for every fact.
+ *  - Extraction phase: strict JSON (responseSchema) that may only restate facts from the report.
+ *  - Model chain: the configured primary model with automatic fallback to the next model when a
+ *    model is unavailable on the key's tier (quota / retired / high demand), plus retries with backoff.
+ */
+const config = require('../config');
+const logger = require('../logger');
+const { AppError, ServiceUnavailableError } = require('../lib/errors');
+const apiKeys = require('./apiKeys.service');
+const { SUBMIT_LEADS_TOOL } = require('../prompts/leadSchema');
+const prompts = require('../prompts/leadGeneration');
+const analysis = require('../prompts/analysis');
+
+let fetchImpl = (...args) => fetch(...args);
+function setFetchForTests(fn) { fetchImpl = fn || ((...args) => fetch(...args)); }
+
+class GeminiApiError extends Error {
+  constructor(status, code, message, details) { super(message); this.status = status; this.code = code; this.details = details; }
+}
+
+// ---------------------------------------------------------------------------
+// Schema conversion (JSON Schema draft -> Gemini/OpenAPI subset)
+// ---------------------------------------------------------------------------
+function toGeminiSchema(schema) {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema.anyOf)) {
+    const nonNull = schema.anyOf.filter((s) => s.type !== 'null');
+    const hasNull = schema.anyOf.length !== nonNull.length;
+    const base = nonNull.length === 1 ? toGeminiSchema({ ...nonNull[0], description: schema.description }) : { type: 'string', description: schema.description };
+    return hasNull ? { ...base, nullable: true } : base;
+  }
+  const out = {};
+  if (schema.type) out.type = schema.type;
+  if (schema.description) out.description = schema.description;
+  if (schema.enum) out.enum = schema.enum;
+  if (schema.nullable) out.nullable = true;
+  if (schema.items) out.items = toGeminiSchema(schema.items);
+  if (schema.properties) {
+    out.properties = {};
+    for (const [k, v] of Object.entries(schema.properties)) out.properties[k] = toGeminiSchema(v);
+    out.propertyOrdering = Object.keys(schema.properties);
+  }
+  if (schema.required) out.required = schema.required;
+  return out;
+}
+const LEADS_SCHEMA = toGeminiSchema(SUBMIT_LEADS_TOOL.input_schema);
+
+// ---------------------------------------------------------------------------
+// Client
+// ---------------------------------------------------------------------------
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const thinkingSupport = new Map(); // model -> 'level' | 'budget' | 'none'
+
+function thinkingConfigFor(model, mode) {
+  const level = config.ai.gemini.thinking;
+  if (level === 'off') return null;
+  if (mode === 'level') return { thinkingLevel: ['low', 'medium', 'high'].includes(level) ? level : 'high' };
+  if (mode === 'budget') return { thinkingBudget: -1 };
+  return null;
+}
+
+class GeminiClient {
+  constructor(apiKey) { this.apiKey = apiKey; this.base = config.ai.gemini.baseUrl.replace(/\/$/, ''); }
+
+  /** One HTTP call. Throws GeminiApiError on non-2xx. */
+  async raw(model, body, { timeoutMs } = {}) {
+    let res;
+    try {
+      res = await fetchImpl(`${this.base}/models/${model}:generateContent`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs || config.ai.gemini.timeoutMs),
+      });
+    } catch (err) {
+      if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) throw new GeminiApiError(504, 'TIMEOUT', 'The Gemini request timed out');
+      throw new GeminiApiError(503, 'NETWORK', `Could not reach the Gemini API: ${err.message}`);
+    }
+    const text = await res.text();
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch (_) { json = null; }
+    if (!res.ok) {
+      const e = (json && json.error) || {};
+      throw new GeminiApiError(res.status, e.status || String(res.status), e.message || `Gemini API error ${res.status}`, e.details || null);
+    }
+    return json;
+  }
+
+  /**
+   * generateContent with: thinking-parameter negotiation, retry/backoff on 503,
+   * and fallback across the model chain on quota (429) / retired (404) models.
+   * Returns { response, model }.
+   */
+  async generate(body, { models, timeoutMs, thinking = true, onModelSwitch } = {}) {
+    const chain = models || [config.ai.gemini.model, ...config.ai.gemini.fallbackModels];
+    let lastErr = null;
+    for (let mi = 0; mi < chain.length; mi++) {
+      const model = chain[mi];
+      let mode = thinkingSupport.get(model) || 'level';
+      for (let attempt = 0; attempt <= config.ai.gemini.maxRetries; attempt++) {
+        const req = JSON.parse(JSON.stringify(body));
+        const tc = thinking ? thinkingConfigFor(model, mode) : null;
+        if (tc) { req.generationConfig = { ...(req.generationConfig || {}), thinkingConfig: tc }; }
+        try {
+          const response = await this.raw(model, req, { timeoutMs });
+          thinkingSupport.set(model, mode);
+          if (mi > 0 && onModelSwitch) onModelSwitch(model, lastErr);
+          return { response, model };
+        } catch (err) {
+          lastErr = err;
+          if (err.status === 400 && /thinking/i.test(err.message) && mode !== 'none') { mode = mode === 'level' ? 'budget' : 'none'; attempt--; continue; }
+          if (err.status === 503 || err.status === 500 || err.code === 'NETWORK') { if (attempt < config.ai.gemini.maxRetries) { await sleep(Math.min(15000, 2500 * (attempt + 1))); continue; } break; }
+          if (err.status === 429 || err.status === 404) break; // next model in the chain
+          throw err;
+        }
+      }
+      logger.warn('Gemini model unavailable, trying next in chain', { model, status: lastErr && lastErr.status, message: lastErr && String(lastErr.message).slice(0, 160) });
+    }
+    throw lastErr || new GeminiApiError(503, 'UNAVAILABLE', 'No Gemini model responded');
+  }
+}
+
+async function getClientForUser(userId) {
+  const { apiKey, source } = await apiKeys.resolveKeyForUser(userId, 'gemini');
+  if (!apiKey) throw new ServiceUnavailableError('No Gemini API key is configured. Add your key in Settings, or set GEMINI_API_KEY on the server.', 'ai_not_configured');
+  return { client: new GeminiClient(apiKey), source };
+}
+
+function mapError(err) {
+  if (err instanceof AppError) return err;
+  let mapped;
+  if (err instanceof GeminiApiError) {
+    const msg = String(err.message || '');
+    if (err.status === 400 && /api key/i.test(msg)) mapped = new AppError('The Gemini API key was rejected (invalid). Update it in Settings.', 502, 'ai_auth_error');
+    else if (err.status === 401 || err.status === 403) mapped = new AppError(`The Gemini API refused the request: ${msg.split('\n')[0].slice(0, 200)}`, 502, 'ai_permission_error');
+    else if (err.status === 404) mapped = new AppError('None of the configured Gemini models is available to this API key. Update GEMINI_MODEL / GEMINI_FALLBACK_MODELS.', 502, 'ai_model_unavailable');
+    else if (err.status === 429) mapped = new AppError('The Gemini API quota for this key is exhausted (free-tier limits). Wait a minute and try again, or enable billing in Google AI Studio to unlock higher limits and Pro models.', 429, 'ai_rate_limited');
+    else if (err.status === 504) mapped = new AppError('The Gemini request timed out. Try again; long research runs continue in batches.', 504, 'ai_timeout');
+    else if (err.status === 503) mapped = new AppError('Gemini is temporarily overloaded (high demand). Please try again in a moment.', 503, 'ai_unavailable');
+    else if (err.status === 400) mapped = new AppError(`Gemini rejected the request: ${msg.slice(0, 300)}`, 502, 'ai_bad_request');
+    else mapped = new AppError(`Gemini API error (${err.status}): ${msg.slice(0, 200)}`, 503, 'ai_api_error');
+  } else mapped = new AppError('Unexpected error while calling Gemini', 500, 'ai_error');
+  mapped.expose = true;
+  mapped.cause = err;
+  return mapped;
+}
+
+// ---------------------------------------------------------------------------
+// Response helpers
+// ---------------------------------------------------------------------------
+function candidateText(response) {
+  const c = response && response.candidates && response.candidates[0];
+  if (!c || !c.content || !Array.isArray(c.content.parts)) return '';
+  return c.content.parts.filter((p) => typeof p.text === 'string' && !p.thought).map((p) => p.text).join('');
+}
+function finishReason(response) { const c = response && response.candidates && response.candidates[0]; return c ? c.finishReason : null; }
+function collectSources(response, into) {
+  const c = response && response.candidates && response.candidates[0];
+  if (!c) return;
+  const gm = c.groundingMetadata || {};
+  for (const ch of gm.groundingChunks || []) if (ch.web && ch.web.uri) into.add(ch.web.uri);
+  const uc = c.urlContextMetadata || c.url_context_metadata || {};
+  for (const m of uc.urlMetadata || uc.url_metadata || []) if (m.retrievedUrl || m.retrieved_url) into.add(m.retrievedUrl || m.retrieved_url);
+}
+function extractUrls(text) {
+  const out = new Set();
+  for (const m of String(text || '').matchAll(/https?:\/\/[^\s)\]>"']+/g)) out.add(m[0].replace(/[.,;:!?]+$/, ''));
+  return [...out];
+}
+function addUsage(total, response, searchQueries) {
+  const u = (response && response.usageMetadata) || {};
+  total.input_tokens += u.promptTokenCount || 0;
+  total.output_tokens += (u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0);
+  total.cache_read_input_tokens += u.cachedContentTokenCount || 0;
+  if (searchQueries) total.web_search_requests += searchQueries;
+}
+function searchQueryCount(response) { const c = response && response.candidates && response.candidates[0]; const gm = c && c.groundingMetadata; return gm && Array.isArray(gm.webSearchQueries) ? gm.webSearchQueries.length : 0; }
+function parseJson(text) {
+  const t = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  try { return JSON.parse(t); } catch (_) { /* fall through */ }
+  const m = /\{[\s\S]*\}/.exec(t);
+  if (m) { try { return JSON.parse(m[0]); } catch (_) { return null; } }
+  return null;
+}
+
+function toolsFor({ webSearch }) {
+  if (!webSearch) return [];
+  const tools = [{ google_search: {} }];
+  if (config.ai.gemini.urlContext) tools.push({ url_context: {} });
+  return tools;
+}
+
+/**
+ * Runs a grounded call. Degrades when the API refuses the tools: a 400 drops url_context and then
+ * all tools; a 429 on every model with tools (grounding has its own quota, absent on free-tier keys)
+ * retries once without tools and reports `grounding_unavailable` so callers can flag the results.
+ */
+async function groundedGenerate(client, { system, userText, webSearch, generationConfig, timeoutMs, models }) {
+  let tools = toolsFor({ webSearch });
+  const warnings = [];
+  for (;;) {
+    const body = { systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: userText }] }], generationConfig: { temperature: config.ai.gemini.temperature, maxOutputTokens: config.ai.gemini.maxOutputTokens, ...(generationConfig || {}) } };
+    if (tools.length) body.tools = tools;
+    try {
+      return { ...(await client.generate(body, { timeoutMs, models })), toolsUsed: tools.map((t) => Object.keys(t)[0]), warnings };
+    } catch (err) {
+      if (err instanceof GeminiApiError && err.status === 400 && tools.length) {
+        if (tools.length > 1) { logger.warn('Gemini rejected url_context; retrying without it', { message: err.message.slice(0, 160) }); tools = tools.slice(0, 1); continue; }
+        logger.warn('Gemini rejected grounding tools; retrying without tools', { message: err.message.slice(0, 160) });
+        warnings.push('grounding_rejected');
+        tools = [];
+        continue;
+      }
+      if (err instanceof GeminiApiError && err.status === 429 && tools.length) {
+        logger.warn('Gemini grounding quota exhausted on every model; retrying without web research', { message: err.message.slice(0, 160) });
+        warnings.push('grounding_unavailable');
+        tools = [];
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+/** Two-phase: research (grounded, free text) then extraction (strict JSON). */
+async function researchThenExtract(client, { system, researchPrompt, extractionSystem, extractionPrompt, schema, webSearch, usage, sources }) {
+  const research = await groundedGenerate(client, { system, userText: researchPrompt, webSearch });
+  const warnings = research.warnings || [];
+  addUsage(usage, research.response, searchQueryCount(research.response));
+  collectSources(research.response, sources);
+  const report = candidateText(research.response);
+  if (finishReason(research.response) === 'SAFETY' || finishReason(research.response) === 'PROHIBITED_CONTENT') throw new AppError('Gemini declined this research request.', 502, 'ai_refusal');
+  for (const u of extractUrls(report)) sources.add(u);
+  const extraction = await client.generate({
+    systemInstruction: { parts: [{ text: extractionSystem }] },
+    contents: [{ role: 'user', parts: [{ text: `${extractionPrompt}\n\n===== RESEARCH REPORT =====\n${report}\n===== END OF REPORT =====` }] }],
+    generationConfig: { temperature: 0, maxOutputTokens: config.ai.gemini.maxOutputTokens, responseMimeType: 'application/json', responseSchema: schema },
+  }, { timeoutMs: Math.min(config.ai.gemini.timeoutMs, 120000), models: [research.model, ...config.ai.gemini.fallbackModels.filter((m) => m !== research.model)] });
+  addUsage(usage, extraction.response, 0);
+  const data = parseJson(candidateText(extraction.response));
+  if (!data) throw new AppError('Gemini returned unreadable JSON. Please try again.', 502, 'ai_bad_output');
+  return { data, report, model: research.model, extractionModel: extraction.model, toolsUsed: research.toolsUsed, warnings };
+}
+
+// ---------------------------------------------------------------------------
+// Public API (same surface as claude.service)
+// ---------------------------------------------------------------------------
+async function testConnection(userId) {
+  const started = Date.now();
+  let source = 'none';
+  try {
+    const resolved = await getClientForUser(userId);
+    source = resolved.source;
+    const switches = [];
+    const { response, model } = await resolved.client.generate({ contents: [{ role: 'user', parts: [{ text: 'Reply with the single word OK.' }] }], generationConfig: { maxOutputTokens: 64 } }, { timeoutMs: 60000, thinking: false, onModelSwitch: (m, err) => switches.push({ model: m, reason: err ? `${err.status} ${String(err.message).split('\n')[0].slice(0, 120)}` : null }) });
+    const result = { ok: true, provider: 'gemini', model, primary_model: config.ai.gemini.model, fallback_used: model !== config.ai.gemini.model, switches, latency_ms: Date.now() - started, key_source: source, reply: candidateText(response).trim().slice(0, 40), tested_at: new Date().toISOString() };
+    if (source === 'user') await apiKeys.recordTestResult(userId, 'gemini', true, { ok: true, model, latency_ms: result.latency_ms, tested_at: result.tested_at });
+    return result;
+  } catch (err) {
+    const mapped = mapError(err);
+    const result = { ok: false, provider: 'gemini', error: { code: mapped.code, message: mapped.message }, key_source: source, latency_ms: Date.now() - started, tested_at: new Date().toISOString() };
+    if (source === 'user') await apiKeys.recordTestResult(userId, 'gemini', false, result).catch(() => {});
+    return result;
+  }
+}
+
+const EXTRACTION_SYSTEM = `You convert a research report about businesses into strict JSON that follows the given schema exactly.
+Rules: include ONLY businesses and facts that appear in the report; never add, guess or "complete" any phone number, email, website, address, name, handle or figure. Use null (or an empty array) for anything the report does not state. Set each field_verification entry to "verified" only when the report shows the value together with a URL where it was seen, "estimated" when the report marks it as an estimate or inference, otherwise "unknown". Copy every URL mentioned for a business into its source_urls. Set confidence to "verified" when name and phone are verified with URLs, "partially_verified" when the name is verified but contact details are only partly verified, "estimated" when most details are inferred, and "needs_verification" otherwise. If the report says no qualifying businesses were found, return an empty leads array and explain in search_notes.`;
+
+async function generateLeadCandidates({ userId, panel, niches, city, count, excludeNames = [], webSearch = config.ai.gemini.webSearch }) {
+  const { client, source } = await getClientForUser(userId);
+  const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, web_search_requests: 0 };
+  const sources = new Set();
+  const system = (panel === 'strategy' ? prompts.STRATEGY_SYSTEM : prompts.SERVICE_SYSTEM).replace(/web search/gi, 'Google Search').replace(/call the submit_leads tool exactly once with all leads\. Do not write the leads as plain text\./i, 'write the findings report described in the task.');
+  const researchPrompt = `${prompts.buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled: webSearch }).replace(/Return the leads by calling submit_leads once\./, '')}
+
+OUTPUT FORMAT for this research step (plain text, not JSON): first a line "SEARCH NOTES:" with what you searched and how many real businesses you could confirm; then one section per business:
+### <Business name>
+- Niche: ...
+- City / address: ... (URL where seen, or "not found")
+- Phone: <exact digits as seen> (URL where seen) | WhatsApp: ... (URL) | Email: ... (URL) — write "not found" instead of guessing
+- Official website: <URL> or "none found after searching" — social pages are NOT websites
+- Social profiles: Instagram <URL>, Facebook <URL>, TikTok <URL>, LinkedIn <URL> (only if seen)
+- Description and services (from the sources)
+- Size / employees / locations / departments: <evidence or "estimated: ..." or "unknown">
+- Owners / management / decision-makers: <only names published on a source, with the URL> or "not published"
+- ${panel === 'strategy' ? 'Booking method today, online booking status, booking problems observed, and why a website / online booking would (or would not) help this business' : 'Repetitive processes observed, existing software if mentioned, operational challenges, and 2-4 specific automation opportunities (process -> automation -> LATechS service)'}
+- Evidence: list of every URL used for this business
+- Verification summary: which of name / phone / website / address / socials / people you saw on a source vs estimated
+Finish with "END OF REPORT".`;
+  try {
+    const { data, report, model, extractionModel, toolsUsed, warnings } = await researchThenExtract(client, {
+      system, researchPrompt, extractionSystem: EXTRACTION_SYSTEM,
+      extractionPrompt: `Convert the research report into JSON for the ${panel === 'strategy' ? 'STRATEGY LEADS' : 'SERVICE SALES LEADS'} panel. Requested niches: ${niches.join('; ')}. City: ${city}. Return at most ${count} leads.`,
+      schema: LEADS_SCHEMA, webSearch, usage, sources,
+    });
+    const leads = Array.isArray(data.leads) ? data.leads : [];
+    const webSearchUsed = webSearch && toolsUsed.includes('google_search');
+    const notes = [String(data.search_notes || '').slice(0, 1800)];
+    if (warnings.includes('grounding_unavailable')) notes.push('WARNING: Google Search grounding is not available on this Gemini API key (quota exhausted / free tier). These leads were produced from the model\'s own knowledge and are saved as "Needs Verification". Enable billing in Google AI Studio to unlock web research.');
+    return { leads, searchNotes: notes.filter(Boolean).join('\n'), sources: [...sources], usage, model: extractionModel === model ? model : `${model} (+${extractionModel})`, webSearchUsed, warnings, keySource: source, report };
+  } catch (err) {
+    const mapped = mapError(err); mapped.usage = usage; throw mapped;
+  }
+}
+
+async function generateBusinessProfile({ userId, contact, calls, previousResearch, webSearch }) {
+  const { client } = await getClientForUser(userId);
+  const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, web_search_requests: 0 };
+  const sources = new Set();
+  const context = analysis.contactContext(contact, calls, previousResearch);
+  try {
+    if (webSearch) {
+      const { data, model } = await researchThenExtract(client, {
+        system: analysis.PROFILE_SYSTEM.replace(/web search/gi, 'Google Search'),
+        researchPrompt: `${context}\n\nResearch this business with Google Search (and open its pages when useful) to confirm services, size, branches, management names that are publicly published, how customers contact it, and its repetitive processes. Write a detailed findings report with a URL for every confirmed fact, clearly marking estimates, and end with a customized automation proposal outline for the meeting.`,
+        extractionSystem: 'You convert a research report into strict JSON following the schema. Only use facts from the report; mark estimates; list every URL from the report in sources_used.',
+        extractionPrompt: 'Convert the report into the business profile JSON.',
+        schema: toGeminiSchema(analysis.BUSINESS_PROFILE_SCHEMA), webSearch: true, usage, sources,
+      });
+      return { data, sources: [...sources], usage, model };
+    }
+    const { response, model } = await client.generate({
+      systemInstruction: { parts: [{ text: analysis.PROFILE_SYSTEM }] },
+      contents: [{ role: 'user', parts: [{ text: `${context}\n\nProduce the business profile and customized automation proposal outline for the meeting. No web research is available; mark unverified information clearly.` }] }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: config.ai.gemini.maxOutputTokens, responseMimeType: 'application/json', responseSchema: toGeminiSchema(analysis.BUSINESS_PROFILE_SCHEMA) },
+    });
+    addUsage(usage, response, 0);
+    const data = parseJson(candidateText(response));
+    if (!data) throw new AppError('Gemini returned an unreadable analysis. Please try again.', 502, 'ai_bad_output');
+    return { data, sources: [], usage, model };
+  } catch (err) { throw mapError(err); }
+}
+
+async function generateBookingAnalysis({ userId, contact, calls }) {
+  const { client } = await getClientForUser(userId);
+  const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, web_search_requests: 0 };
+  try {
+    const { response, model } = await client.generate({
+      systemInstruction: { parts: [{ text: analysis.BOOKING_SYSTEM }] },
+      contents: [{ role: 'user', parts: [{ text: `${analysis.contactContext(contact, calls, null)}\n\nAnalyse the booking situation and prepare the employee for the next conversation.` }] }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: config.ai.gemini.maxOutputTokens, responseMimeType: 'application/json', responseSchema: toGeminiSchema(analysis.BOOKING_ANALYSIS_SCHEMA) },
+    });
+    addUsage(usage, response, 0);
+    const data = parseJson(candidateText(response));
+    if (!data) throw new AppError('Gemini returned an unreadable analysis. Please try again.', 502, 'ai_bad_output');
+    return { data, sources: [], usage, model };
+  } catch (err) { throw mapError(err); }
+}
+
+function describe() {
+  return { provider: 'gemini', provider_label: 'Google Gemini', model: config.ai.gemini.model, fallback_models: config.ai.gemini.fallbackModels, web_search: config.ai.gemini.webSearch, url_context: config.ai.gemini.urlContext, thinking: config.ai.gemini.thinking, search_label: 'Google Search grounding' };
+}
+
+module.exports = { testConnection, generateLeadCandidates, generateBusinessProfile, generateBookingAnalysis, mapError, describe, getClientForUser, toGeminiSchema, setFetchForTests, GeminiApiError, GeminiClient, LEADS_SCHEMA };

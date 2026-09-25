@@ -47,6 +47,24 @@ const config = {
     loginWindowMinutes: int(env.LOGIN_WINDOW_MINUTES, 15),
   },
 
+  // AI provider selection: gemini (default when GEMINI_API_KEY is set) or anthropic
+  ai: {
+    provider: (env.AI_PROVIDER || (env.GEMINI_API_KEY || env.GOOGLE_API_KEY ? 'gemini' : 'anthropic')).toLowerCase(),
+    gemini: {
+      apiKey: env.GEMINI_API_KEY || env.GOOGLE_API_KEY || '',
+      baseUrl: env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta',
+      model: env.GEMINI_MODEL || 'gemini-3.1-pro-preview',
+      fallbackModels: (env.GEMINI_FALLBACK_MODELS || 'gemini-3.8-flash,gemini-flash-latest,gemini-3.5-flash,gemini-3.1-flash-lite').split(',').map((m) => m.trim()).filter(Boolean),
+      webSearch: bool(env.GEMINI_WEB_SEARCH, true),
+      urlContext: bool(env.GEMINI_URL_CONTEXT, true),
+      thinking: env.GEMINI_THINKING || 'high', // high | medium | low | off  (Gemini 3 thinkingLevel; older models use a dynamic budget)
+      temperature: Number.isFinite(parseFloat(env.GEMINI_TEMPERATURE)) ? parseFloat(env.GEMINI_TEMPERATURE) : 0.2,
+      timeoutMs: int(env.GEMINI_TIMEOUT_MS, 170000),
+      maxRetries: int(env.GEMINI_MAX_RETRIES, 3),
+      maxOutputTokens: int(env.GEMINI_MAX_OUTPUT_TOKENS, 16384),
+    },
+  },
+
   claude: {
     apiKey: env.ANTHROPIC_API_KEY || '',
     model: env.CLAUDE_MODEL || 'claude-opus-5',

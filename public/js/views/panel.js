@@ -23,7 +23,7 @@ export async function renderPanel(root, type) {
   const view = { lists: [], niches: [], selectedListId: null, claude: null, settings: null, filters: { status: '', search: '' }, page: 0 };
 
   const [listsRes, nichesRes, claudeRes, settingsRes] = await Promise.all([
-    api.get(`/api/lists?contact_type=${type}`), api.get(`/api/niches?panel=${type}`), api.get('/api/claude/status').catch(() => null), api.get('/api/settings').catch(() => null),
+    api.get(`/api/lists?contact_type=${type}`), api.get(`/api/niches?panel=${type}`), api.get('/api/ai/status').catch(() => null), api.get('/api/settings').catch(() => null),
   ]);
   view.lists = listsRes.items; view.niches = nichesRes.items; view.claude = claudeRes; view.settings = settingsRes;
   const current = view.lists.find((l) => l.is_current_cycle && l.original_owner_id === state.user.id) || view.lists[0];
@@ -33,7 +33,7 @@ export async function renderPanel(root, type) {
     <div class="panel-banner ${type} mb-3"><div class="flex-between"><div><h1>${info.icon} ${info.title} ${raw(panelBadge(type))}</h1><p class="muted" style="max-width:820px">${info.tagline}</p><div class="small"><b>Goal:</b> ${info.goal}</div></div></div>
       <details class="acc mt-2"><summary>How this panel works (step by step)</summary><div class="acc-body"><div class="steps mt-2">${join(info.steps, (s) => html`<div class="step ${type}"><div>${s}</div></div>`)}</div></div></details>
     </div>
-    ${view.claude && view.claude.active_source === 'none' ? raw('<div class="warn-box mb-3">No Claude API key is configured, so contact generation is unavailable. Add your key in <a href="#/settings/claude">Settings → Claude API</a> or ask the administrator to set the server key.</div>') : raw('')}
+    ${view.claude && view.claude.active_source === 'none' ? raw(`<div class="warn-box mb-3">No ${esc(view.claude.provider_label || 'AI')} API key is configured, so contact generation is unavailable. Add your key in <a href="#/settings/claude">Settings → AI configuration</a> or ask the administrator to set the server key.</div>`) : raw('')}
     <div class="grid split" id="topGrid">
       <div class="card" id="listsCard"></div>
       <div class="card" id="genCard"></div>
@@ -80,7 +80,7 @@ export async function renderPanel(root, type) {
     const j = job || (currentList ? currentList.generation_job : null);
     const canGenerate = view.claude && view.claude.active_source !== 'none';
     genCard.innerHTML = html`<div class="card-head"><h2>Generate contacts</h2>${currentList ? raw(`<span class="small muted">${have}/${target} in ${esc(currentList.list_code)}</span>`) : raw('<span class="small muted">creates this cycle\'s list</span>')}</div>
-      ${!generating ? html`<div class="small muted mb-2">Select one or more niches (saved preferences are pre-selected), choose how many contacts, then generate. Claude researches real Pakistani businesses${view.claude && view.claude.search && view.claude.search.claude_web_search ? ' with live web search' : ''}, every candidate is verified where possible, and duplicates across the whole database are rejected automatically.</div>
+      ${!generating ? html`<div class="small muted mb-2">Select one or more niches (saved preferences are pre-selected), choose how many contacts, then generate. ${view.claude ? view.claude.provider_label || 'The AI' : 'The AI'} researches real Pakistani businesses${view.claude && view.claude.web_search ? ` with ${view.claude.search_label || 'live web search'}` : ''}, every candidate is verified where possible, and duplicates across the whole database are rejected automatically.</div>
         <div style="max-height:260px;overflow:auto;padding-right:4px">${join(Object.entries(groups), ([g, items]) => html`${Object.keys(groups).length > 1 ? html`<h4 class="mt-2">${g}</h4>` : raw('')}<div class="chips mb-2">${join(items, (n) => html`<label class="chip ${type} ${saved.includes(n.id) ? 'on' : ''}"><input type="checkbox" name="niche" value="${n.id}" ${saved.includes(n.id) ? 'checked' : ''}>${n.name}</label>`)}</div>`)}</div>
         <div class="flex flex-wrap mt-2"><label class="field"><span>Number of contacts (max 50)</span><input type="number" name="count" min="1" max="50" value="${currentList ? target : 50}" style="width:120px"></label><div class="grow"></div>
           <button class="btn ${type}" id="genBtn" ${!canGenerate ? 'disabled' : ''}>${currentList && have > 0 && remaining > 0 ? `Continue generating (${remaining} more)` : currentList && remaining === 0 ? 'List is full' : 'Generate Contacts'}</button></div>
@@ -104,7 +104,8 @@ export async function renderPanel(root, type) {
       <div class="flex-between"><b>${running ? raw('<span class="spinner"></span> ') : raw('')}${running ? `Generating ${saved} / ${target}` : j.status === 'completed' ? `Completed: ${saved} / ${target}` : j.status === 'exhausted' ? `Source exhausted: ${saved} / ${target}` : j.status === 'cancelled' ? `Cancelled at ${saved} / ${target}` : j.status === 'failed' ? `Failed at ${saved} / ${target}` : `${saved} / ${target}`}</b>${running ? raw('<button class="btn xs danger" id="genCancel">Stop</button>') : raw('')}</div>
       <div class="mt-1">${raw(progressBar(saved, target || 1, type))}</div>
       <div class="grid grid-4 mt-2 small"><div><span class="muted">Saved</span><br><b>${num(saved)}</b></div><div><span class="muted">Duplicates rejected</span><br><b>${num(j.duplicate_count || 0)}</b></div><div><span class="muted">Needs verification</span><br><b>${num(j.needs_verification_count || 0)}</b></div><div><span class="muted">Rejected / invalid</span><br><b>${num(j.rejected_count || 0)}</b></div></div>
-      ${batch ? html`<div class="small muted mt-2">Last batch: ${batch.niche} · ${batch.city} · received ${batch.received}, saved ${batch.saved}, duplicates ${batch.duplicates}, rejected ${batch.rejected}${batch.web_search_used ? ' · web search used' : ' · no web search'}${batch.search_notes ? raw(`<details class="mt-1"><summary class="small">Research notes</summary><div class="note-block mt-1">${esc(batch.search_notes)}</div></details>`) : raw('')}</div>` : raw('')}
+      ${batch && batch.warnings && batch.warnings.includes('grounding_unavailable') ? raw('<div class="warn-box small mt-2">Web research (Google Search grounding) is not available on the current Gemini API key, so these contacts come from the model\'s own knowledge and are marked <b>Needs Verification</b>. Enable billing for the Gemini API key in Google AI Studio to unlock live web research and the Pro model.</div>') : raw('')}
+      ${batch ? html`<div class="small muted mt-2">Last batch: ${batch.niche} · ${batch.city} · received ${batch.received}, saved ${batch.saved}, duplicates ${batch.duplicates}, rejected ${batch.rejected}${batch.web_search_used ? ' · web research used' : ' · no web research'}${batch.model ? ` · ${batch.model}` : ''}${batch.search_notes ? raw(`<details class="mt-1"><summary class="small">Research notes</summary><div class="note-block mt-1">${esc(batch.search_notes)}</div></details>`) : raw('')}</div>` : raw('')}
       ${error ? html`<div class="error-box mt-2 small">${error}</div>` : raw('')}
       ${j.attempts ? html`<div class="tiny faint mt-1">${j.attempts} batch attempt(s)${j.last_batch_at ? ' · last ' + timeAgo(j.last_batch_at) : ''}</div>` : raw('')}
     </div>`;

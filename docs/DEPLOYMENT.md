@@ -15,7 +15,7 @@ Copy `.env.example` to `.env` for local use. Every variable is documented in
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | Supabase PostgreSQL connection string (transaction pooler, port 6543, on Vercel) |
-| `ANTHROPIC_API_KEY` | Server-wide Claude key (users may add personal keys in Settings) |
+| `GEMINI_API_KEY` | Server-wide Gemini key (or `ANTHROPIC_API_KEY` + `AI_PROVIDER=anthropic`); users may add personal keys in Settings |
 | `APP_ENCRYPTION_KEY` | Random 32+ byte secret; encrypts personal Claude keys at rest |
 | `CRON_SECRET` | Random secret; Vercel Cron sends it as `Authorization: Bearer` |
 | `NODE_ENV` | `production` |
@@ -54,12 +54,14 @@ Included in the migrations: unique indexes for global duplicate prevention
 the meeting overlap exclusion constraint, per-cycle list uniqueness, rotation idempotency indexes
 and all query indexes. Nothing else to run.
 
-## 6. Configure the Claude API
-* Set `ANTHROPIC_API_KEY` (server key). Default model `claude-opus-5`; override with `CLAUDE_MODEL`.
-* `CLAUDE_WEB_SEARCH=true` (default) lets Claude research businesses with live web search and cite
-  sources. Set to `false` to disable (all leads will then be *Needs Verification*).
-* Each user can save a personal key in **Settings → Claude API** (encrypted with `APP_ENCRYPTION_KEY`)
-  and test the connection there. The personal key takes precedence for that user.
+## 6. Configure the AI provider
+* **Gemini (default):** set `GEMINI_API_KEY` (Google AI Studio). Primary model `gemini-3.1-pro-preview`
+  with automatic fallback to the current Flash models (`GEMINI_FALLBACK_MODELS`). For the best results the
+  key's Google Cloud project must have billing enabled: the free tier has no quota for Pro models or for
+  Google Search grounding, so research then runs ungrounded and leads are marked *Needs Verification*.
+* **Anthropic:** set `ANTHROPIC_API_KEY` and `AI_PROVIDER=anthropic`. Default model `claude-opus-5`.
+* Each user can save a personal key in **Settings → AI configuration** (encrypted with
+  `APP_ENCRYPTION_KEY`) and test the connection there. The personal key takes precedence for that user.
 
 ## 7. Configure the optional business/search API
 `LEAD_SEARCH_PROVIDER=serper` with `SERPER_API_KEY` enables Google Places verification of every
@@ -110,7 +112,7 @@ Sign in as each user. Verify: wrong password → error; `AMMAN` (any case) works
 see owner pages; Settings → Account → change password.
 
 ## 15. Test lead generation
-Settings → Claude API → **Test API connection** must succeed. Then in *Strategy Leads* select a niche,
+Settings → AI configuration → **Test API connection** must succeed. Then in *Strategy Leads* select a niche,
 request 5 contacts and click **Generate Contacts**. Watch the live counters (saved / duplicates /
 needs verification). Open a contact: verification badges, source URLs and per-field verification are shown.
 

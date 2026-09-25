@@ -26,7 +26,7 @@ function webSearchToolFor(model, city, maxUses) {
 }
 
 async function getClientForUser(userId) {
-  const { apiKey, source } = await apiKeys.resolveKeyForUser(userId);
+  const { apiKey, source } = await apiKeys.resolveKeyForUser(userId, 'anthropic');
   if (!apiKey) {
     throw new ServiceUnavailableError('No Claude API key is configured. Add your key in Settings, or set ANTHROPIC_API_KEY on the server.', 'claude_not_configured');
   }
@@ -121,13 +121,13 @@ async function testConnection(userId) {
     source = resolved.source;
     const params = { ...baseParams(config.claude.model, { effort: 'low' }), max_tokens: 256, messages: [{ role: 'user', content: 'Reply with the single word OK.' }] };
     const msg = await createMessage(resolved.client, params, { stream: false });
-    const result = { ok: true, model: msg.model || config.claude.model, latency_ms: Date.now() - started, key_source: source, reply: textOf(msg).trim().slice(0, 40), tested_at: new Date().toISOString() };
-    if (source === 'user') await apiKeys.recordTestResult(userId, true, { ok: true, model: result.model, latency_ms: result.latency_ms, tested_at: result.tested_at });
+    const result = { ok: true, provider: 'anthropic', model: msg.model || config.claude.model, latency_ms: Date.now() - started, key_source: source, reply: textOf(msg).trim().slice(0, 40), tested_at: new Date().toISOString() };
+    if (source === 'user') await apiKeys.recordTestResult(userId, 'anthropic', true, { ok: true, model: result.model, latency_ms: result.latency_ms, tested_at: result.tested_at });
     return result;
   } catch (err) {
     const mapped = mapError(err);
-    const result = { ok: false, error: { code: mapped.code, message: mapped.message }, key_source: source, latency_ms: Date.now() - started, tested_at: new Date().toISOString() };
-    if (source === 'user') await apiKeys.recordTestResult(userId, false, result).catch(() => {});
+    const result = { ok: false, provider: 'anthropic', error: { code: mapped.code, message: mapped.message }, key_source: source, latency_ms: Date.now() - started, tested_at: new Date().toISOString() };
+    if (source === 'user') await apiKeys.recordTestResult(userId, 'anthropic', false, result).catch(() => {});
     return result;
   }
 }
