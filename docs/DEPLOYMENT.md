@@ -37,6 +37,17 @@ DATABASE_URL="postgresql://..." npm run migrate
 Applies `db/migrations/*.sql` in order and records them in `schema_migrations`. Re-running is safe.
 Use `node scripts/migrate.js --status` to see what is applied.
 
+On Vercel the build command (`vercel.json` → `npm run migrate && npm run seed`) applies pending
+migrations and creates the three accounts automatically on every deployment, so the database is
+always in sync with the deployed code. Both scripts are idempotent.
+
+**Supabase connectivity:** the direct host `db.<ref>.supabase.co` is IPv6-only and is not
+reachable from Vercel. Use the Supavisor pooler URL instead:
+`postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres`.
+If you do not know the region, deploy once with the build command `npm run db:probe`; the build
+log prints the working endpoint (`DB-PROBE: RECOMMENDED …`). URL-encode special characters in
+the password (`@` → `%40`).
+
 ## 5. Create indexes and constraints
 Included in the migrations: unique indexes for global duplicate prevention
 (`contacts_normalized_phone_uidx`, `contacts_normalized_domain_uidx`, `contacts_name_city_uidx`),

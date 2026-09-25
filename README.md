@@ -200,5 +200,5 @@ and meetings (creation, overlap prevention incl. concurrent bookings, shared vis
 * `npm run migrate` – apply pending migrations (safe to re-run); `node scripts/migrate.js --status`.
 * `npm run seed` – create the three accounts (`--reset-passwords` to restore initial passwords).
 * `npm run rotation:run` – run the rotation/generation scheduler once from any machine or cron.
-* `npm run db:status` – connectivity and migration check.
+* `npm run db:status` – connectivity and migration check; `npm run db:probe` – finds a reachable Supabase endpoint.
 * Settings → *Database & generation status* (owner) shows DB health, environment flags and jobs.
