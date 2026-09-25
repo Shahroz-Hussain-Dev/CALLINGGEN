@@ -40,6 +40,7 @@ function mapError(err) {
   else if (err instanceof Anthropic.PermissionDeniedError) mapped = new AppError('The Claude API key does not have permission for this request.', 502, 'claude_permission_error');
   else if (err instanceof Anthropic.NotFoundError) mapped = new AppError(`The configured Claude model (${config.claude.model}) is not available to this API key.`, 502, 'claude_model_unavailable');
   else if (err instanceof Anthropic.RateLimitError) mapped = new AppError('The Claude API rate limit was reached. Wait a moment and try again.', 429, 'claude_rate_limited');
+  else if (err instanceof Anthropic.BadRequestError && /credit balance/i.test(String(err.message))) mapped = new AppError('The Anthropic account behind this API key has no credits. Add credits at console.anthropic.com (Plans & Billing), then try again.', 502, 'claude_billing');
   else if (err instanceof Anthropic.BadRequestError) mapped = new AppError(`Claude rejected the request: ${String(err.message).slice(0, 300)}`, 502, 'claude_bad_request');
   else if (err instanceof Anthropic.APIConnectionTimeoutError) mapped = new AppError('The Claude request timed out. Try again; long research runs are resumed automatically in batches.', 504, 'claude_timeout');
   else if (err instanceof Anthropic.APIConnectionError) mapped = new AppError('Could not connect to the Claude API. Check network access from the server.', 503, 'claude_unreachable');
