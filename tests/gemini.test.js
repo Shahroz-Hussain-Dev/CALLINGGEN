@@ -5,7 +5,7 @@ process.env.GEMINI_API_KEY = 'AIzaFAKEKEY000000000000000000000000000';
 process.env.GEMINI_MODEL = 'gemini-test-pro';
 process.env.GEMINI_FALLBACK_MODELS = 'gemini-test-flash,gemini-test-lite';
 process.env.GEMINI_MAX_RETRIES = '1';
-const { test } = require('node:test');
+const { test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const gemini = require('../server/services/gemini.service');
 const apiKeys = require('../server/services/apiKeys.service');
@@ -26,6 +26,7 @@ function fakeFetch(handler) {
   return calls;
 }
 const serverKey = async () => ({ apiKey: 'k', source: 'server' });
+beforeEach(() => gemini.resetQuotaMemoryForTests());
 
 test('schema conversion turns anyOf-null into nullable and drops unsupported keywords', () => {
   const s = gemini.toGeminiSchema({ type: 'object', additionalProperties: false, required: ['a', 'b'], properties: { a: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'd' }, b: { type: 'array', items: { type: 'string', enum: ['x', 'y'] } } } });
@@ -121,5 +122,22 @@ test('falls back to ungrounded research when grounding is quota-blocked, and fla
     assert.match(r.searchNotes, /Needs Verification/);
     assert.equal(r.leads.length, 1);
     assert.ok(calls.some((c) => c.body.tools), 'grounded attempt was made first');
+  } finally { apiKeys.resolveKeyForUser = origResolve; gemini.setFetchForTests(null); }
+});
+
+test('retries extraction on a different model when the JSON output is unreadable', async () => {
+  const origResolve = apiKeys.resolveKeyForUser; apiKeys.resolveKeyForUser = serverKey;
+  const models = [];
+  fakeFetch(async ({ model, body }) => {
+    if (!body.generationConfig.responseMimeType) return { json: textResponse('### Biz\n- Phone: 0300-1111111 (https://x.example)\nEND OF REPORT') };
+    models.push(model);
+    if (models.length === 1) return { json: { candidates: [{ content: { parts: [{ text: '{"search_notes": "cut off', }] }, finishReason: 'MAX_TOKENS' }], usageMetadata: {} } };
+    return { json: textResponse(JSON.stringify({ search_notes: 'ok', leads: [{ business_name: 'Biz', city: 'Lahore', phone: '0300-1111111' }] })) };
+  });
+  try {
+    const r = await gemini.generateLeadCandidates({ userId: 'u', panel: 'strategy', niches: ['X'], city: 'Lahore', count: 1, webSearch: false });
+    assert.equal(r.leads.length, 1);
+    assert.equal(models.length, 2);
+    assert.notEqual(models[0], models[1]);
   } finally { apiKeys.resolveKeyForUser = origResolve; gemini.setFetchForTests(null); }
 });

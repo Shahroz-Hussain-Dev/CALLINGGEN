@@ -61,7 +61,9 @@ const config = {
       temperature: Number.isFinite(parseFloat(env.GEMINI_TEMPERATURE)) ? parseFloat(env.GEMINI_TEMPERATURE) : 0.2,
       timeoutMs: int(env.GEMINI_TIMEOUT_MS, 170000),
       maxRetries: int(env.GEMINI_MAX_RETRIES, 3),
-      maxOutputTokens: int(env.GEMINI_MAX_OUTPUT_TOKENS, 16384),
+      maxOutputTokens: int(env.GEMINI_MAX_OUTPUT_TOKENS, 65536),
+      quotaCooldownMs: int(env.GEMINI_QUOTA_COOLDOWN_MS, 10 * 60 * 1000),
+      groundingCooldownMs: int(env.GEMINI_GROUNDING_COOLDOWN_MS, 30 * 60 * 1000),
     },
   },
 

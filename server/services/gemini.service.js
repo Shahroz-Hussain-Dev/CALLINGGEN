@@ -56,12 +56,18 @@ const LEADS_SCHEMA = toGeminiSchema(SUBMIT_LEADS_TOOL.input_schema);
 // ---------------------------------------------------------------------------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const thinkingSupport = new Map(); // model -> 'level' | 'budget' | 'none'
+// Quota memory (per process): models that answered 429 recently are skipped for a cooldown so the
+// chain does not burn the per-minute request quota on models the key cannot use; likewise for grounding.
+const quotaBlockedUntil = new Map(); // model -> timestamp
+let groundingBlockedUntil = 0;
+function resetQuotaMemoryForTests() { quotaBlockedUntil.clear(); groundingBlockedUntil = 0; thinkingSupport.clear(); }
 
-function thinkingConfigFor(model, mode) {
-  const level = config.ai.gemini.thinking;
-  if (level === 'off') return null;
+/** thinking: true (configured level), 'low' (cheap mechanical tasks) or false (none). */
+function thinkingConfigFor(model, mode, thinking) {
+  const level = thinking === 'low' ? 'low' : config.ai.gemini.thinking;
+  if (level === 'off' || thinking === false) return null;
   if (mode === 'level') return { thinkingLevel: ['low', 'medium', 'high'].includes(level) ? level : 'high' };
-  if (mode === 'budget') return { thinkingBudget: -1 };
+  if (mode === 'budget') return { thinkingBudget: thinking === 'low' ? 1024 : -1 };
   return null;
 }
 
@@ -96,25 +102,29 @@ class GeminiClient {
    * Returns { response, model }.
    */
   async generate(body, { models, timeoutMs, thinking = true, onModelSwitch } = {}) {
-    const chain = models || [config.ai.gemini.model, ...config.ai.gemini.fallbackModels];
+    const fullChain = models || [config.ai.gemini.model, ...config.ai.gemini.fallbackModels];
+    const now = Date.now();
+    let chain = fullChain.filter((m) => (quotaBlockedUntil.get(m) || 0) <= now);
+    if (!chain.length) chain = fullChain; // everything is cooling down: try anyway
     let lastErr = null;
     for (let mi = 0; mi < chain.length; mi++) {
       const model = chain[mi];
       let mode = thinkingSupport.get(model) || 'level';
       for (let attempt = 0; attempt <= config.ai.gemini.maxRetries; attempt++) {
         const req = JSON.parse(JSON.stringify(body));
-        const tc = thinking ? thinkingConfigFor(model, mode) : null;
+        const tc = thinkingConfigFor(model, mode, thinking);
         if (tc) { req.generationConfig = { ...(req.generationConfig || {}), thinkingConfig: tc }; }
         try {
           const response = await this.raw(model, req, { timeoutMs });
           thinkingSupport.set(model, mode);
-          if (mi > 0 && onModelSwitch) onModelSwitch(model, lastErr);
+          if (model !== fullChain[0] && onModelSwitch) onModelSwitch(model, lastErr);
           return { response, model };
         } catch (err) {
           lastErr = err;
           if (err.status === 400 && /thinking/i.test(err.message) && mode !== 'none') { mode = mode === 'level' ? 'budget' : 'none'; attempt--; continue; }
           if (err.status === 503 || err.status === 500 || err.code === 'NETWORK') { if (attempt < config.ai.gemini.maxRetries) { await sleep(Math.min(15000, 2500 * (attempt + 1))); continue; } break; }
-          if (err.status === 429 || err.status === 404) break; // next model in the chain
+          if (err.status === 429) { quotaBlockedUntil.set(model, Date.now() + config.ai.gemini.quotaCooldownMs); break; } // next model in the chain
+          if (err.status === 404) { quotaBlockedUntil.set(model, Date.now() + 24 * 3600 * 1000); break; }
           throw err;
         }
       }
@@ -202,6 +212,7 @@ function toolsFor({ webSearch }) {
 async function groundedGenerate(client, { system, userText, webSearch, generationConfig, timeoutMs, models }) {
   let tools = toolsFor({ webSearch });
   const warnings = [];
+  if (tools.length && groundingBlockedUntil > Date.now()) { warnings.push('grounding_unavailable'); tools = []; }
   for (;;) {
     const body = { systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: userText }] }], generationConfig: { temperature: config.ai.gemini.temperature, maxOutputTokens: config.ai.gemini.maxOutputTokens, ...(generationConfig || {}) } };
     if (tools.length) body.tools = tools;
@@ -217,6 +228,8 @@ async function groundedGenerate(client, { system, userText, webSearch, generatio
       }
       if (err instanceof GeminiApiError && err.status === 429 && tools.length) {
         logger.warn('Gemini grounding quota exhausted on every model; retrying without web research', { message: err.message.slice(0, 160) });
+        groundingBlockedUntil = Date.now() + config.ai.gemini.groundingCooldownMs;
+        for (const m of quotaBlockedUntil.keys()) quotaBlockedUntil.delete(m); // those 429s were about grounding, not the models
         warnings.push('grounding_unavailable');
         tools = [];
         continue;
@@ -233,16 +246,35 @@ async function researchThenExtract(client, { system, researchPrompt, extractionS
   addUsage(usage, research.response, searchQueryCount(research.response));
   collectSources(research.response, sources);
   const report = candidateText(research.response);
-  if (finishReason(research.response) === 'SAFETY' || finishReason(research.response) === 'PROHIBITED_CONTENT') throw new AppError('Gemini declined this research request.', 502, 'ai_refusal');
+  const rf = finishReason(research.response);
+  if (rf === 'SAFETY' || rf === 'PROHIBITED_CONTENT') throw new AppError('Gemini declined this research request.', 502, 'ai_refusal');
+  if (!report.trim()) {
+    const cand = research.response && research.response.candidates && research.response.candidates[0];
+    logger.warn('Gemini research returned no text', { model: research.model, finish: rf, promptFeedback: research.response && research.response.promptFeedback, parts: cand && cand.content ? (cand.content.parts || []).map((p) => Object.keys(p).join('+')) : null, usage: research.response && research.response.usageMetadata });
+    throw new AppError(`Gemini returned an empty research result (${rf || 'no candidate'}). Please try again.`, 502, 'ai_bad_output');
+  }
   for (const u of extractUrls(report)) sources.add(u);
-  const extraction = await client.generate({
+  const extractionBody = {
     systemInstruction: { parts: [{ text: extractionSystem }] },
     contents: [{ role: 'user', parts: [{ text: `${extractionPrompt}\n\n===== RESEARCH REPORT =====\n${report}\n===== END OF REPORT =====` }] }],
     generationConfig: { temperature: 0, maxOutputTokens: config.ai.gemini.maxOutputTokens, responseMimeType: 'application/json', responseSchema: schema },
-  }, { timeoutMs: Math.min(config.ai.gemini.timeoutMs, 120000), models: [research.model, ...config.ai.gemini.fallbackModels.filter((m) => m !== research.model)] });
-  addUsage(usage, extraction.response, 0);
-  const data = parseJson(candidateText(extraction.response));
-  if (!data) throw new AppError('Gemini returned unreadable JSON. Please try again.', 502, 'ai_bad_output');
+  };
+  let models = [research.model, ...config.ai.gemini.fallbackModels.filter((m) => m !== research.model)];
+  let extraction = null;
+  let data = null;
+  for (let attempt = 0; attempt < 2 && !data; attempt++) {
+    extraction = await client.generate(extractionBody, { timeoutMs: Math.min(config.ai.gemini.timeoutMs, 150000), thinking: 'low', models });
+    addUsage(usage, extraction.response, 0);
+    const extractedText = candidateText(extraction.response);
+    data = parseJson(extractedText);
+    if (!data) {
+      const cand = extraction.response && extraction.response.candidates && extraction.response.candidates[0];
+      logger.warn('Gemini extraction returned unreadable JSON', { attempt, model: extraction.model, finish: finishReason(extraction.response), promptFeedback: extraction.response && extraction.response.promptFeedback, parts: cand && cand.content ? (cand.content.parts || []).map((p) => Object.keys(p).join('+')) : null, textHead: String(extractedText).slice(0, 400), textTail: String(extractedText).slice(-200), usage: extraction.response && extraction.response.usageMetadata });
+      models = models.filter((m) => m !== extraction.model); // retry once on a different model
+      if (!models.length) break;
+    }
+  }
+  if (!data) throw new AppError(`Gemini returned unreadable JSON (${(extraction && finishReason(extraction.response)) || 'no candidate'}). Please try again.`, 502, 'ai_bad_output');
   return { data, report, model: research.model, extractionModel: extraction.model, toolsUsed: research.toolsUsed, warnings };
 }
 
@@ -356,4 +388,4 @@ function describe() {
   return { provider: 'gemini', provider_label: 'Google Gemini', model: config.ai.gemini.model, fallback_models: config.ai.gemini.fallbackModels, web_search: config.ai.gemini.webSearch, url_context: config.ai.gemini.urlContext, thinking: config.ai.gemini.thinking, search_label: 'Google Search grounding' };
 }
 
-module.exports = { testConnection, generateLeadCandidates, generateBusinessProfile, generateBookingAnalysis, mapError, describe, getClientForUser, toGeminiSchema, setFetchForTests, GeminiApiError, GeminiClient, LEADS_SCHEMA };
+module.exports = { testConnection, generateLeadCandidates, generateBusinessProfile, generateBookingAnalysis, mapError, describe, getClientForUser, toGeminiSchema, setFetchForTests, resetQuotaMemoryForTests, GeminiApiError, GeminiClient, LEADS_SCHEMA };
