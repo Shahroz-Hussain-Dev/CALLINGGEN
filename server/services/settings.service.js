@@ -2,6 +2,9 @@
 const db = require('../db');
 const { ValidationError } = require('../lib/errors');
 const activity = require('./activity.service');
+const { encrypt, decrypt, encryptionAvailable } = require('../lib/crypto');
+
+const WEB_SEARCH_KEY_FIELDS = ['serper', 'jina', 'tavily', 'brave', 'google_cse_key', 'google_cse_id'];
 
 const DEFAULTS = {
   rotation_interval_days: 3,
@@ -25,7 +28,31 @@ const EDITABLE = {
   timezone: (v) => { try { new Intl.DateTimeFormat('en-US', { timeZone: String(v) }); } catch (_) { throw new ValidationError('Unknown timezone'); } return String(v); },
   target_cities: (v) => { if (!Array.isArray(v) || !v.length || v.some((c) => typeof c !== 'string' || !c.trim())) throw new ValidationError('target_cities must be a non-empty list of city names'); return v.map((c) => c.trim()).slice(0, 60); },
   default_meeting_duration_minutes: (v) => { const n = parseInt(v, 10); if (!(n >= 15 && n <= 480)) throw new ValidationError('default_meeting_duration_minutes must be 15-480'); return n; },
+  // Web research API keys: stored encrypted; empty string clears a key; undefined keeps it.
+  web_search_keys: (v, current) => {
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new ValidationError('web_search_keys must be an object');
+    if (!encryptionAvailable()) throw new ValidationError('APP_ENCRYPTION_KEY is not configured on the server, so API keys cannot be stored');
+    const existing = decryptKeys(current);
+    const merged = { ...existing };
+    for (const f of WEB_SEARCH_KEY_FIELDS) {
+      if (v[f] === undefined) continue;
+      const val = String(v[f] || '').trim();
+      if (val && val.length > 300) throw new ValidationError(`${f} is too long`);
+      if (val) merged[f] = val; else delete merged[f];
+    }
+    return { encrypted: encrypt(JSON.stringify(merged)) };
+  },
 };
+
+function decryptKeys(stored) {
+  try { if (stored && stored.encrypted && encryptionAvailable()) return JSON.parse(decrypt(stored.encrypted)) || {}; } catch (_) { /* ignore */ }
+  return {};
+}
+function maskKeys(keys) {
+  const out = {};
+  for (const f of WEB_SEARCH_KEY_FIELDS) out[f] = keys[f] ? { set: true, last4: String(keys[f]).slice(-4) } : { set: false };
+  return out;
+}
 
 async function getAll(client) {
   const { rows } = await db.q(client)('SELECT key, value, updated_at FROM system_settings');
@@ -42,20 +69,37 @@ async function get(key, client) {
 async function update(user, patch) {
   const applied = {};
   await db.withTransaction(async (client) => {
+    const current = await getAll(client);
     for (const [key, raw] of Object.entries(patch || {})) {
       if (!EDITABLE[key]) throw new ValidationError(`Unknown setting: ${key}`);
-      const value = EDITABLE[key](raw);
+      const value = EDITABLE[key](raw, current[key]);
       await client.query(
         `INSERT INTO system_settings (key, value, updated_by) VALUES ($1, $2, $3)
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
         [key, JSON.stringify(value), user.id],
       );
       applied[key] = value;
+      if (key === 'web_search_keys') clearKeyCache();
     }
     await activity.log('settings_changed', { userId: user.id, details: { scope: 'system', keys: Object.keys(applied) } }, client);
   });
-  return getAll();
+  return getAllPublic();
 }
+
+/** System settings safe to send to the owner UI (API keys masked). */
+async function getAllPublic(client) {
+  const all = await getAll(client);
+  return { ...all, web_search_keys: maskKeys(decryptKeys(all.web_search_keys)) };
+}
+
+let keyCache = { at: 0, keys: {} };
+/** Decrypted web research keys stored by the owner (cached for 60 s). */
+async function getWebSearchKeys() {
+  if (Date.now() - keyCache.at < 60000) return keyCache.keys;
+  try { const all = await getAll(); keyCache = { at: Date.now(), keys: decryptKeys(all.web_search_keys) }; } catch (_) { keyCache = { at: Date.now(), keys: {} }; }
+  return keyCache.keys;
+}
+function clearKeyCache() { keyCache = { at: 0, keys: {} }; }
 
 // ---- per-user settings ----------------------------------------------------
 async function getUserSettings(userId, client) {
@@ -86,4 +130,4 @@ async function updateUserSettings(user, patch) {
   return getUserSettings(user.id);
 }
 
-module.exports = { DEFAULTS, getAll, get, update, getUserSettings, updateUserSettings };
+module.exports = { DEFAULTS, getAll, getAllPublic, get, update, getUserSettings, updateUserSettings, getWebSearchKeys, clearKeyCache, WEB_SEARCH_KEY_FIELDS };

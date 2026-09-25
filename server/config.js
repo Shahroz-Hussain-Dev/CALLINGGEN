@@ -86,7 +86,12 @@ const config = {
   websearch: {
     engine: (env.WEB_SEARCH_ENGINE || 'duckduckgo').toLowerCase(), // duckduckgo | brave | serper
     braveApiKey: env.BRAVE_SEARCH_API_KEY || '',
+    jinaApiKey: env.JINA_API_KEY || '',
+    tavilyApiKey: env.TAVILY_API_KEY || '',
+    googleCseKey: env.GOOGLE_CSE_API_KEY || '',
+    googleCseId: env.GOOGLE_CSE_ID || '',
     minGapMs: int(env.WEB_SEARCH_MIN_GAP_MS, 400),
+    bingGapMs: int(env.BING_MIN_GAP_MS, 5000),
     timeoutMs: int(env.WEB_SEARCH_TIMEOUT_MS, 15000),
   },
   evidence: {

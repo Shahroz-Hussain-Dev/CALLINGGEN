@@ -77,7 +77,9 @@ See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for the step-by-step guide. Sum
    `DATABASE_URL=<supabase url> npm run migrate && DATABASE_URL=<supabase url> npm run seed`.
 4. Deploy. `vercel.json` routes `/api/*` to the serverless API, serves `public/` as static
    files, and registers the daily rotation cron (`5 19 * * *` UTC = 00:05 Pakistan time).
-5. Sign in, open **Settings → AI configuration → Test API connection**, then generate the first lists.
+5. Sign in, open **Settings → AI configuration → Test API connection**. On a free-tier Gemini key, also paste
+   one free search API key (Serper recommended) in **Settings → System configuration → Web research API keys**
+   and click *Test web research*. Then generate the first lists.
 
 ---
 
@@ -101,7 +103,8 @@ See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for the step-by-step guide. Sum
    facts from the report. With the Anthropic provider the same rules apply through Claude's web search
    and a strict `submit_leads` tool.
    **Free mode (no paid grounding needed):** when the Gemini key has no Google-grounding quota (free
-   tier), the app runs its own web research: six DuckDuckGo searches per niche and city, reads up to eight
+   tier), the app runs its own web research: six web searches per niche and city (Serper/Jina/Tavily/
+   Google Programmable Search with a free key, or DuckDuckGo/Bing where those are not blocked), reads up to eight
    of the resulting pages (directories, salon and company websites; social pages via their search
    snippets), extracts phone numbers, emails and social links, and gives that evidence bundle to the
    model in a single strict-JSON call. The server then verifies every returned fact against the evidence:

@@ -65,10 +65,22 @@ and all query indexes. Nothing else to run.
 * Each user can save a personal key in **Settings → AI configuration** (encrypted with
   `APP_ENCRYPTION_KEY`) and test the connection there. The personal key takes precedence for that user.
 
-## 7. Configure the optional business/search API
-`LEAD_SEARCH_PROVIDER=serper` with `SERPER_API_KEY` enables Google Places verification of every
-candidate (phone, address, website, rating). Additional providers implement the interface in
-`server/services/search/index.js` and are selected by the same variable – no redesign needed.
+## 7. Configure the web research / business-data API
+Lead research reads real web pages. From Vercel's network the key-less engines (DuckDuckGo, Bing) are
+blocked, so add **one** free search API key, either as an environment variable or by pasting it in
+**Settings → System configuration → Web research API keys** (stored encrypted):
+
+| Service | Free tier | Variable |
+|---|---|---|
+| Serper (Google results + Places verification) — recommended | 2,500 searches, no card | `SERPER_API_KEY` |
+| Jina | free key, large allowance | `JINA_API_KEY` |
+| Tavily | 1,000 searches / month | `TAVILY_API_KEY` |
+| Google Programmable Search | 100 queries / day | `GOOGLE_CSE_API_KEY` + `GOOGLE_CSE_ID` |
+| Brave Search | card required | `BRAVE_SEARCH_API_KEY` |
+
+`LEAD_SEARCH_PROVIDER=serper` (with the Serper key) additionally verifies every candidate through
+Google Places (phone, address, website, rating). Additional providers implement the interface in
+`server/services/search/index.js`. Use **Settings → System configuration → Test web research** to confirm.
 
 ## 8. Seed the accounts
 ```bash

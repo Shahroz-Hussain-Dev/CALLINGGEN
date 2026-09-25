@@ -47,8 +47,11 @@ to the browser.
 ## Free built-in web research (evidence mode)
 | Variable | Description |
 |---|---|
-| `WEB_SEARCH_ENGINE` | `duckduckgo` (default, no key) / `brave` (needs `BRAVE_SEARCH_API_KEY`, free tier) / `serper`. Keyed engines are used first when configured; DuckDuckGo is always the fallback. |
-| `BRAVE_SEARCH_API_KEY` | Optional Brave Search API key. |
+| `WEB_SEARCH_ENGINE` | Preferred engine: `duckduckgo` (default) / `bing` (key-less, blocked from Vercel's network) / `serper` / `jina` / `tavily` / `brave` / `google_cse`. Engines with a configured key are always tried before the key-less ones; blocked or empty engines fail over automatically. |
+| `SERPER_API_KEY` | Serper.dev key (Google results; 2,500 free searches, no card). Also enables Google Places verification. **Recommended.** |
+| `JINA_API_KEY` / `TAVILY_API_KEY` / `BRAVE_SEARCH_API_KEY` | Alternative search APIs with free tiers. |
+| `GOOGLE_CSE_API_KEY` + `GOOGLE_CSE_ID` | Google Programmable Search JSON API (100 free queries/day). |
+| (Settings UI) | The owner can paste any of these keys in Settings → System configuration; they are stored AES-256-GCM encrypted in `system_settings` and take precedence over the environment. |
 | `EVIDENCE_TIME_BUDGET_MS` | Total time spent searching and reading pages per batch (default 45000). |
 | `EVIDENCE_MAX_PAGES` | Pages read per batch (default 8). |
 | `EVIDENCE_MAX_PROMPT_CHARS` | Evidence characters passed to the model (default 36000). |

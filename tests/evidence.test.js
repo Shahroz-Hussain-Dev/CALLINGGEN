@@ -5,6 +5,9 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const websearch = require('../server/services/websearch.service');
 const evidence = require('../server/services/evidence.service');
+const settings = require('../server/services/settings.service');
+let storedKeys = {};
+settings.getWebSearchKeys = async () => storedKeys; // no database in these unit tests
 
 const DDG_HTML = `<div class="result results_links results_links_deep web-result "><div class="links_main links_deep result__body"><h2 class="result__title"><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.instagram.com%2Fglowstudio.pk%2F&amp;rut=abc">Glow Studio (@glowstudio.pk) &#x2022; Instagram</a></h2><a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.instagram.com%2Fglowstudio.pk%2F">Bridal makeup studio Lahore. Bookings on WhatsApp 0300-1234567</a></div></div>
 <div class="result results_links results_links_deep web-result "><div class="links_main"><h2 class="result__title"><a rel="nofollow" class="result__a" href="https://example-directory.pk/lahore/salons">Salons in Lahore | Directory</a></h2><a class="result__snippet" href="https://example-directory.pk/lahore/salons">Top salons with phone numbers</a></div></div>`;
@@ -16,6 +19,23 @@ test('parses DuckDuckGo HTML results and decodes redirect links', () => {
   assert.match(r[0].title, /Glow Studio/);
   assert.match(r[0].snippet, /0300-1234567/);
   assert.equal(r[1].url, 'https://example-directory.pk/lahore/salons');
+});
+
+test('parses Bing RSS results and fails over to Bing when DuckDuckGo is blocked', async () => {
+  const rss = '<?xml version="1.0"?><rss><channel><item><title>NOOREYS - Makeup Studio | Lahore</title><link>https://www.facebook.com/nooreysmakeupstudio/</link><description>Bridal makeup &amp; WhatsApp bookings 0325-4066555</description></item><item><title>Bad</title><link>javascript:void(0)</link><description>x</description></item></channel></rss>';
+  const r = websearch.parseBingRss(rss);
+  assert.equal(r.length, 1); assert.equal(r[0].url, 'https://www.facebook.com/nooreysmakeupstudio/'); assert.match(r[0].snippet, /& WhatsApp bookings 0325-4066555/);
+  websearch.resetForTests();
+  const hits = [];
+  websearch.setFetchForTests(async (url) => { hits.push(url.split('?')[0]); if (/duckduckgo/.test(url)) return { status: 403, text: async () => 'blocked' }; return { ok: true, status: 200, text: async () => rss }; });
+  try {
+    const a = await websearch.search('bridal makeup Lahore', { count: 5 });
+    assert.equal(a.length, 1);
+    const b = await websearch.search('another query', { count: 5 });
+    assert.equal(b.length, 1);
+    assert.equal(hits.filter((h) => /duckduckgo/.test(h)).length, 1, 'DuckDuckGo is skipped after being blocked once');
+    assert.ok((await websearch.describe()).blocked.includes('duckduckgo'));
+  } finally { websearch.setFetchForTests(null); websearch.resetForTests(); }
 });
 
 test('extracts Pakistani phone numbers, emails and social links from page text', () => {
@@ -54,7 +74,7 @@ test('gather runs the query set, skips junk hosts, reads pages and collects phon
   const pageHtml = '<html><head><title>Sarah Makeup Studio Lahore</title><meta name="description" content="Bridal makeup"></head><body><script>x()</script><h1>Sarah Makeup Studio</h1><p>Call us: 0321-1112223 · <a href="https://www.instagram.com/sarahstudio">Instagram</a></p><p>We offer bridal makeup, party makeup, hair styling, facials and mehndi in Johar Town, Lahore. Bookings are taken on WhatsApp and by phone; walk-ins welcome on weekdays.</p></body></html>';
   websearch.setFetchForTests(async (url) => ({ status: 200, text: async () => DDG_HTML.replace('example-directory.pk/lahore/salons', 'sarahstudio.pk/') }));
   evidence.setFetchForTests(async (url) => ({ ok: true, status: 200, url, headers: { get: () => 'text/html; charset=utf-8' }, body: null, text: async () => pageHtml }));
-  websearch.cache.clear();
+  websearch.resetForTests();
   try {
     const ev = await evidence.gather({ panel: 'strategy', niche: 'Bridal Makeup Studios', city: 'Lahore', timeBudgetMs: 5000, maxPages: 3 });
     assert.equal(ev.queries.length, 6);
@@ -65,5 +85,33 @@ test('gather runs the query set, skips junk hosts, reads pages and collects phon
     assert.ok(ev.corpus.includes('sarah makeup studio'));
     const rendered = evidence.render(ev);
     assert.match(rendered, /SEARCH RESULTS/); assert.match(rendered, /PAGE EXTRACTS/); assert.match(rendered, /0321 1112223|\+92 321 1112223/);
-  } finally { websearch.setFetchForTests(null); evidence.setFetchForTests(null); websearch.cache.clear(); }
+  } finally { websearch.setFetchForTests(null); evidence.setFetchForTests(null); websearch.resetForTests(); }
+});
+
+test('keyed engines (Serper, Jina, Tavily) come first when their keys are stored, and parse results', async () => {
+  websearch.resetForTests();
+  storedKeys = { jina: 'jk' };
+  const urls = [];
+  websearch.setFetchForTests(async (url, opts) => {
+    urls.push(url.split('?')[0]);
+    if (/s\.jina\.ai/.test(url)) { assert.equal(opts.headers.Authorization, 'Bearer jk'); return { ok: true, status: 200, json: async () => ({ data: [{ title: 'Glow Studio', url: 'https://instagram.com/glow', description: 'Bridal makeup Lahore 0300-1234567' }] }), text: async () => '' }; }
+    return { ok: true, status: 200, text: async () => '' };
+  });
+  try {
+    const d = await websearch.describe();
+    assert.deepEqual(d.engines.slice(0, 1), ['jina']);
+    const r = await websearch.search('bridal makeup Lahore', { count: 5 });
+    assert.equal(r.length, 1); assert.equal(r[0].url, 'https://instagram.com/glow');
+    assert.equal(urls.length, 1, 'no fallback engine was needed');
+    websearch.resetForTests(); storedKeys = { serper: 'sk', tavily: 'tk' };
+    websearch.setFetchForTests(async (url, opts) => {
+      if (/serper\.dev/.test(url)) return { ok: true, status: 200, json: async () => ({ organic: [{ title: 'Noor Studio', link: 'https://facebook.com/noor', snippet: 'WhatsApp 0321-0000000' }] }), text: async () => '' };
+      if (/tavily/.test(url)) return { ok: true, status: 200, json: async () => ({ results: [{ title: 'T', url: 'https://t.example', content: 'x' }] }), text: async () => '' };
+      return { ok: true, status: 200, text: async () => '' };
+    });
+    const d2 = await websearch.describe();
+    assert.deepEqual(d2.engines.slice(0, 2), ['serper', 'tavily']);
+    const r2 = await websearch.search('salon Karachi', { count: 5 });
+    assert.equal(r2[0].url, 'https://facebook.com/noor');
+  } finally { websearch.setFetchForTests(null); websearch.resetForTests(); storedKeys = {}; }
 });

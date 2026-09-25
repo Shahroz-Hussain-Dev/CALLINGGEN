@@ -86,3 +86,24 @@ test('password change works and is audited', async () => {
   const { rows } = await h.db.query("SELECT count(*) AS n FROM activity_logs WHERE action = 'password_changed'");
   assert.equal(Number(rows[0].n), 1);
 });
+
+test('the owner can store web research API keys encrypted; they are masked in responses and hidden from employees', async () => {
+  const { amman, shahroz } = await h.loginAll();
+  assert.equal((await h.request('PATCH', '/api/settings/system', { cookie: amman.cookie, body: { web_search_keys: { serper: 'abc' } } })).status, 403);
+  const r = await h.request('PATCH', '/api/settings/system', { cookie: shahroz.cookie, body: { web_search_keys: { serper: 'serper-secret-key-12345', jina: 'jina-secret-9999' } } });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.system.web_search_keys.serper.set, true);
+  assert.equal(r.body.system.web_search_keys.serper.last4, '2345');
+  assert.equal(JSON.stringify(r.body).includes('serper-secret'), false, 'plaintext never returned');
+  const { rows } = await h.db.query("SELECT value::text AS v FROM system_settings WHERE key = 'web_search_keys'");
+  assert.equal(rows[0].v.includes('serper-secret'), false, 'plaintext never stored');
+  const settings = require('../server/services/settings.service');
+  settings.clearKeyCache();
+  const keys = await settings.getWebSearchKeys();
+  assert.equal(keys.serper, 'serper-secret-key-12345');
+  const cleared = await h.request('PATCH', '/api/settings/system', { cookie: shahroz.cookie, body: { web_search_keys: { jina: '' } } });
+  assert.equal(cleared.body.system.web_search_keys.jina.set, false);
+  assert.equal(cleared.body.system.web_search_keys.serper.set, true, 'other keys are kept');
+  const status = await h.request('GET', '/api/ai/status', { cookie: shahroz.cookie });
+  assert.deepEqual(status.body.web_research.engines.slice(0, 1), ['serper']);
+});

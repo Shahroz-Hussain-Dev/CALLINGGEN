@@ -5,6 +5,7 @@ const settings = require('../services/settings.service');
 const apiKeys = require('../services/apiKeys.service');
 const search = require('../services/search');
 const ai = require('../services/ai.service');
+const websearch = require('../services/websearch.service');
 const db = require('../db');
 const config = require('../config');
 const cycle = require('../services/cycle.service');
@@ -15,9 +16,9 @@ router.use('/settings', requireAuth);
 router.get('/settings', async (req, res) => {
   const userSettings = await settings.getUserSettings(req.user.id);
   const aiStatus = await apiKeys.getStatus(req.user.id);
-  const out = { user: req.user, user_settings: userSettings, ai: { ...aiStatus, ...ai.describe(), search: search.describe() } };
+  const out = { user: req.user, user_settings: userSettings, ai: { ...aiStatus, ...ai.describe(), search: search.describe(), web_research: await websearch.describe() } };
   out.claude = out.ai; // backward compatibility
-  if (req.user.role === 'owner') out.system = await settings.getAll();
+  if (req.user.role === 'owner') out.system = await settings.getAllPublic();
   res.json(out);
 });
 router.patch('/settings/user', async (req, res) => res.json({ user_settings: await settings.updateUserSettings(req.user, req.body || {}) }));

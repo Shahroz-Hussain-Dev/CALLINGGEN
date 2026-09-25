@@ -9,6 +9,7 @@ const { test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const gemini = require('../server/services/gemini.service');
 const apiKeys = require('../server/services/apiKeys.service');
+require('../server/services/settings.service').getWebSearchKeys = async () => ({}); // no database in these unit tests
 
 function textResponse(text, extra = {}) {
   return { candidates: [{ content: { parts: [{ text }] }, finishReason: 'STOP', ...extra }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, thoughtsTokenCount: 3 }, modelVersion: 'x' };
