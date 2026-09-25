@@ -58,7 +58,7 @@ and all query indexes. Nothing else to run.
 * **Gemini (default):** set `GEMINI_API_KEY` (Google AI Studio). Primary model `gemini-3.1-pro-preview`
   with automatic fallback to the current Flash models (`GEMINI_FALLBACK_MODELS`). On a free-tier key
   (no billing) Pro models and Google Search grounding are unavailable; the app then uses the free
-  built-in web research (DuckDuckGo + page reading + server-side fact verification) with the Flash
+  built-in web research (key-less web search + page reading + server-side fact verification) with the Flash
   models, one model call per batch. Free-tier daily request limits apply per model; the fallback chain
   spreads batches across several Flash models. Enabling billing unlocks Pro and native grounding.
 * **Anthropic:** set `ANTHROPIC_API_KEY` and `AI_PROVIDER=anthropic`. Default model `claude-opus-5`.
@@ -66,9 +66,15 @@ and all query indexes. Nothing else to run.
   `APP_ENCRYPTION_KEY`) and test the connection there. The personal key takes precedence for that user.
 
 ## 7. Configure the web research / business-data API
-Lead research reads real web pages. From Vercel's network the key-less engines (DuckDuckGo, Bing) are
-blocked, so add **one** free search API key, either as an environment variable or by pasting it in
-**Settings → System configuration → Web research API keys** (stored encrypted):
+Lead research reads real web pages and needs no key. Direct DuckDuckGo and Bing are blocked from
+Vercel's network, so set `WEB_SEARCH_ENGINE=jina_reader` there: search result pages are then rendered
+through the key-less Jina Reader proxy (`r.jina.ai`, about 20 requests per minute, enough for the
+six searches a batch makes), and pages that refuse direct fetches are re-read the same way. Engines
+that fail, rate-limit or keep returning nothing are put on cooldown automatically.
+
+Optional free search API keys are tried before the key-less engines and raise quality and throughput.
+Add one as an environment variable or paste it in **Settings → System configuration → Web research
+API keys** (stored encrypted):
 
 | Service | Free tier | Variable |
 |---|---|---|

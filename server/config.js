@@ -84,7 +84,7 @@ const config = {
 
   // Free web research (evidence mode): key-less search engine + page reading
   websearch: {
-    engine: (env.WEB_SEARCH_ENGINE || 'duckduckgo').toLowerCase(), // duckduckgo | brave | serper
+    engine: (env.WEB_SEARCH_ENGINE || 'duckduckgo').toLowerCase(), // duckduckgo | jina_reader | bing | serper | brave | google_cse | tavily | jina
     braveApiKey: env.BRAVE_SEARCH_API_KEY || '',
     jinaApiKey: env.JINA_API_KEY || '',
     tavilyApiKey: env.TAVILY_API_KEY || '',
@@ -92,6 +92,8 @@ const config = {
     googleCseId: env.GOOGLE_CSE_ID || '',
     minGapMs: int(env.WEB_SEARCH_MIN_GAP_MS, 400),
     bingGapMs: int(env.BING_MIN_GAP_MS, 5000),
+    jinaGapMs: int(env.JINA_MIN_GAP_MS, 3200), // key-less Jina Reader: 20 requests/minute per IP
+    jinaRateLimitCooldownMs: int(env.JINA_RATE_LIMIT_COOLDOWN_MS, 90000),
     timeoutMs: int(env.WEB_SEARCH_TIMEOUT_MS, 15000),
   },
   evidence: {
@@ -101,6 +103,7 @@ const config = {
     maxPageBytes: int(env.EVIDENCE_MAX_PAGE_BYTES, 400000),
     maxPageChars: int(env.EVIDENCE_MAX_PAGE_CHARS, 4500),
     maxPromptChars: int(env.EVIDENCE_MAX_PROMPT_CHARS, 36000),
+    jinaPageFallbacks: int(env.EVIDENCE_JINA_PAGE_FALLBACKS, 3), // pages re-read through Jina Reader when a site blocks direct fetches
   },
 
   search: {

@@ -33,6 +33,14 @@ router.get('/ai/search-test', async (req, res) => {
     ['startpage_html', `https://www.startpage.com/do/search?q=${encodeURIComponent(q)}&cat=web&language=english`, /class="w-gl__result|result-link/g],
   ];
   const diagnostics = [];
+  // Jina Reader proxy (key-less): renders the search result page from Jina's network instead of ours
+  for (const [name, target] of [['jina_reader_ddg_lite', `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}&kl=pk-en`], ['jina_reader_bing', `https://www.bing.com/search?q=${encodeURIComponent(q)}&mkt=en-PK&setlang=en`]]) {
+    try {
+      const r = await websearch.readViaJina(target, { timeoutMs: 20000 });
+      const parsed = websearch.parseJinaMarkdown(r.text, name.endsWith('bing') ? websearch.decodeBingUrl : websearch.decodeDdgUrl);
+      diagnostics.push({ engine: name, status: r.status, length: r.text.length, matches: parsed.length, rate_limit_remaining: Number.isFinite(r.remaining) ? r.remaining : null, head: r.text.replace(/\s+/g, ' ').slice(0, 120) });
+    } catch (err) { diagnostics.push({ engine: name, error: err.message.slice(0, 120), blocked: !!err.blocked }); }
+  }
   for (const [name, url, marker] of probes) {
     try {
       const r = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml,application/xml,application/json,*/*', 'Accept-Language': 'en-US,en;q=0.9' }, redirect: 'follow', signal: AbortSignal.timeout(12000) });

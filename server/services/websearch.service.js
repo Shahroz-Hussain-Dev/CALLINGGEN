@@ -1,8 +1,11 @@
 'use strict';
 /**
- * Free, key-less web search used for evidence gathering (default engine: DuckDuckGo HTML).
- * Optional keyed engines can be added here; the interface is search(query, {count}) ->
- * [{ title, url, snippet }]. Results are cached in memory for a short time.
+ * Web search used for evidence gathering. Engines share one interface, search(query, {count}) ->
+ * [{ title, url, snippet }], and are tried in order until one answers (see engineChain()):
+ *   keyed engines (Serper, Brave, Google Programmable Search, Tavily, Jina Search) when configured,
+ *   then the key-less engines: DuckDuckGo (direct), Jina Reader proxy (DuckDuckGo Lite / Bing rendered
+ *   by r.jina.ai, which works from cloud networks that the search engines block), and Bing RSS.
+ * Blocked or rate-limited engines are put on cooldown; results are cached in memory for a short time.
  */
 const config = require('../config');
 const logger = require('../logger');
@@ -28,6 +31,59 @@ function decodeDdgUrl(href) {
     if (/duckduckgo\.com\/l\//.test(u.href)) return null;
     return u.href;
   } catch (_) { return null; }
+}
+
+/** Bing result links are redirects (bing.com/ck/a?...&u=a1<base64url>): recover the target URL. */
+function decodeBingUrl(href) {
+  const h = String(href || '');
+  try {
+    const u = new URL(h);
+    if (!/(^|\.)bing\.com$/.test(u.hostname) || !u.pathname.startsWith('/ck/')) return /^https?:\/\//.test(h) ? h : null;
+    const packed = u.searchParams.get('u') || '';
+    if (!packed.startsWith('a1')) return null;
+    const b64 = packed.slice(2).replace(/-/g, '+').replace(/_/g, '/');
+    const target = Buffer.from(b64 + '='.repeat((4 - (b64.length % 4)) % 4), 'base64').toString('utf8');
+    return /^https?:\/\//.test(target) ? target : null;
+  } catch (_) { return null; }
+}
+const MD_JUNK_HOSTS = /(^|\.)(duckduckgo\.com|bing\.com|microsoft\.com|jina\.ai|google\.com|live\.com|msn\.com)$/i;
+function cleanMarkdownText(s) { return decodeEntities(String(s || '').replace(/\*\*\*\*/g, ' ').replace(/\*\*/g, '').replace(/\\([\[\]()*_])/g, '$1').replace(/(\w)&(\s)/g, '$1 &$2')); }
+/**
+ * Parses a search result page rendered as markdown by Jina Reader. Both DuckDuckGo Lite and Bing
+ * render as a numbered list: "N.[title](link)" or "N.   ## [title](link)" followed by the snippet.
+ */
+function parseJinaMarkdown(md, decodeLink) {
+  const out = [];
+  const body = String(md || '').split(/\n\s*Links\/Buttons:/)[0];
+  const re = /^\s*\d+\.\s*(?:#+\s*)?\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)\s*\n([\s\S]*?)(?=^\s*\d+\.\s*(?:#+\s*)?\[|\s*$)/gm;
+  let m;
+  while ((m = re.exec(body))) {
+    const url = decodeLink(m[2]);
+    if (!url || !/^https?:\/\//.test(url)) continue;
+    let host; try { host = new URL(url).hostname; } catch (_) { continue; }
+    if (MD_JUNK_HOSTS.test(host)) continue;
+    const snippet = m[3].split('\n').map((l) => l.trim()).filter((l) => l && !/^https?:\/\//.test(l) && !/^[\w.-]+\.[a-z]{2,}(\/\S*)?$/i.test(l)).join(' ');
+    out.push({ title: cleanMarkdownText(m[1]), url, snippet: cleanMarkdownText(snippet) });
+  }
+  return out;
+}
+
+const JINA_READER = 'https://r.jina.ai/';
+let lastJinaAt = 0;
+let jinaRateLimitedUntil = 0; // key-less Jina Reader allows ~20 requests/minute per IP
+/** Fetches a URL rendered as markdown by Jina Reader (key-less; the JINA_API_KEY raises the rate limit when set). */
+async function readViaJina(targetUrl, { timeoutMs = config.websearch.timeoutMs } = {}) {
+  if (jinaRateLimitedUntil > Date.now()) throw new BlockedError('Jina Reader rate limit cooldown', jinaRateLimitedUntil - Date.now());
+  const wait = lastJinaAt + config.websearch.jinaGapMs - Date.now();
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastJinaAt = Date.now();
+  const headers = { Accept: 'text/plain', 'X-Timeout': String(Math.max(5, Math.floor(timeoutMs / 1000) - 3)), 'X-Return-Format': 'markdown' };
+  if (keys.jina) headers.Authorization = `Bearer ${keys.jina}`;
+  const res = await fetchImpl(JINA_READER + targetUrl, { headers, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
+  const text = await res.text();
+  if (res.status === 429) { jinaRateLimitedUntil = Date.now() + config.websearch.jinaRateLimitCooldownMs; throw new BlockedError('Jina Reader rate limit (HTTP 429)', config.websearch.jinaRateLimitCooldownMs); }
+  if (res.status === 401 || res.status === 402) throw new BlockedError(`Jina Reader returned HTTP ${res.status}`);
+  return { status: res.status, text, remaining: Number(res.headers && res.headers.get ? res.headers.get('x-ratelimit-remaining') : NaN) };
 }
 
 async function throttle() {
@@ -70,7 +126,10 @@ function parseDdgLite(html) {
 
 const engineBlockedUntil = new Map(); // engine -> timestamp (blocked / rate-limited engines are skipped for a while)
 const ENGINE_COOLDOWN_MS = 30 * 60 * 1000;
-class BlockedError extends Error { constructor(msg) { super(msg); this.blocked = true; } }
+const emptyStreak = new Map(); // engine -> consecutive empty answers (an engine that keeps returning nothing is soft-throttling us)
+const EMPTY_STREAK_LIMIT = 2;
+const EMPTY_COOLDOWN_MS = 10 * 60 * 1000;
+class BlockedError extends Error { constructor(msg, cooldownMs) { super(msg); this.blocked = true; this.cooldownMs = cooldownMs || ENGINE_COOLDOWN_MS; } }
 
 function parseBingRss(xml) {
   const out = [];
@@ -144,6 +203,25 @@ const engines = {
     if (!results.length && !/<rss/.test(text)) throw new BlockedError('Bing did not return RSS results');
     return results.slice(0, count);
   },
+  /** Key-less proxy engine: search result pages rendered by Jina Reader (works where engines block cloud IPs). */
+  async jina_reader(query, count) {
+    const sources = [
+      ['duckduckgo_lite', `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}&kl=pk-en`, decodeDdgUrl],
+      ['bing', `https://www.bing.com/search?q=${encodeURIComponent(query)}&mkt=en-PK&setlang=en`, decodeBingUrl],
+    ];
+    let lastErr = null;
+    for (const [name, url, decode] of sources) {
+      try {
+        const r = await readViaJina(url);
+        if (r.status !== 200) { lastErr = new Error(`Jina Reader (${name}) returned HTTP ${r.status}`); continue; }
+        const results = parseJinaMarkdown(r.text, decode);
+        if (results.length) return results.slice(0, count);
+        if (/anomaly|captcha|challenge|unusual traffic|are you a robot|access denied/i.test(r.text.slice(0, 6000))) lastErr = new Error(`${name} challenged Jina Reader`);
+      } catch (err) { if (err.blocked) throw err; lastErr = err; }
+    }
+    if (lastErr) throw lastErr;
+    return [];
+  },
   async duckduckgo(query, count) {
     let r = await getHtml('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query) + '&kl=pk-en');
     if (r.status === 403 || r.status === 202 || r.status === 429) throw new BlockedError(`DuckDuckGo returned HTTP ${r.status}`);
@@ -177,8 +255,8 @@ const engines = {
   },
 };
 
-/** Engine order: keyed engines when configured, then the preferred free engine, then the other free engines. */
-/** Engine order: keyed engines (Google-quality first) when configured, then the free key-less engines. */
+const FREE_ENGINES = ['duckduckgo', 'jina_reader', 'bing'];
+/** Engine order: keyed engines (Google-quality first) when configured, then the free key-less engines (preferred one first). */
 function engineChain() {
   const preferred = config.websearch.engine;
   const chain = [];
@@ -187,7 +265,7 @@ function engineChain() {
   if (keys.google_cse_key && keys.google_cse_id) chain.push('google_cse');
   if (keys.tavily) chain.push('tavily');
   if (keys.jina) chain.push('jina');
-  const free = ['duckduckgo', 'bing'];
+  const free = FREE_ENGINES;
   if (free.includes(preferred)) chain.push(preferred, ...free.filter((f) => f !== preferred));
   else chain.push(...free);
   if (!free.includes(preferred) && chain.includes(preferred)) { const i = chain.indexOf(preferred); if (i > 0) { chain.splice(i, 1); chain.unshift(preferred); } }
@@ -206,12 +284,19 @@ async function search(query, { count = 8 } = {}) {
   for (const name of activeEngines()) {
     try {
       const results = await engines[name](query, count);
-      if (!results.length) { sawEmpty = true; continue; } // an engine with no answer: let the next one try
+      if (!results.length) { // an engine with no answer: let the next one try; repeated silence means it is throttling us
+        sawEmpty = true;
+        const streak = (emptyStreak.get(name) || 0) + 1;
+        emptyStreak.set(name, streak);
+        if (streak >= EMPTY_STREAK_LIMIT && activeEngines().length > 1) { engineBlockedUntil.set(name, Date.now() + EMPTY_COOLDOWN_MS); logger.warn('Web search engine demoted after repeated empty answers', { engine: name }); }
+        continue;
+      }
+      emptyStreak.set(name, 0);
       cache.set(key, { at: Date.now(), results, engine: name });
       return results;
     } catch (err) {
       lastErr = err;
-      if (err.blocked) engineBlockedUntil.set(name, Date.now() + ENGINE_COOLDOWN_MS);
+      if (err.blocked) engineBlockedUntil.set(name, Date.now() + (err.cooldownMs || ENGINE_COOLDOWN_MS));
       logger.warn('Web search engine failed', { engine: name, blocked: !!err.blocked, error: err.message.slice(0, 120) });
     }
   }
@@ -220,7 +305,7 @@ async function search(query, { count = 8 } = {}) {
   return [];
 }
 
-async function describe() { await loadKeys(); const chain = engineChain(); const live = activeEngines(); return { engine: live[0], engines: chain, blocked: chain.filter((e) => !live.includes(e)), keyed: chain.filter((e) => !['duckduckgo', 'bing'].includes(e)), free: ['duckduckgo', 'bing'].includes(live[0]) }; }
-function resetForTests() { cache.clear(); engineBlockedUntil.clear(); lastRequestAt = 0; lastBingAt = 0; settings.clearKeyCache(); }
+async function describe() { await loadKeys(); const chain = engineChain(); const live = activeEngines(); return { engine: live[0], engines: chain, blocked: chain.filter((e) => !live.includes(e)), keyed: chain.filter((e) => !FREE_ENGINES.includes(e)), free: FREE_ENGINES.includes(live[0]) }; }
+function resetForTests() { cache.clear(); engineBlockedUntil.clear(); emptyStreak.clear(); lastRequestAt = 0; lastBingAt = 0; lastJinaAt = 0; jinaRateLimitedUntil = 0; settings.clearKeyCache(); }
 
-module.exports = { search, describe, setFetchForTests, resetForTests, parseDdgHtml, parseDdgLite, parseBingRss, decodeDdgUrl, decodeEntities, engines, cache };
+module.exports = { search, describe, readViaJina, setFetchForTests, resetForTests, parseDdgHtml, parseDdgLite, parseBingRss, parseJinaMarkdown, decodeDdgUrl, decodeBingUrl, decodeEntities, engines, cache, FREE_ENGINES };

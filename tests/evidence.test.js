@@ -33,9 +33,124 @@ test('parses Bing RSS results and fails over to Bing when DuckDuckGo is blocked'
     assert.equal(a.length, 1);
     const b = await websearch.search('another query', { count: 5 });
     assert.equal(b.length, 1);
-    assert.equal(hits.filter((h) => /duckduckgo/.test(h)).length, 1, 'DuckDuckGo is skipped after being blocked once');
+    assert.equal(hits.filter((h) => /^https:\/\/(html|lite)\.duckduckgo/.test(h)).length, 1, 'DuckDuckGo is skipped after being blocked once');
     assert.ok((await websearch.describe()).blocked.includes('duckduckgo'));
   } finally { websearch.setFetchForTests(null); websearch.resetForTests(); }
+});
+
+const JINA_LITE_MD = `Title: bridal makeup studio Lahore at DuckDuckGo
+
+URL Source: https://lite.duckduckgo.com/lite/?q=bridal%20makeup%20studio%20Lahore&kl=pk-en
+
+Markdown Content:
+1.[NUMRA - Makeup Studio & Salon | Lahore - Facebook](https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.facebook.com%2FNumraMakeupS%2F&rut=b229)
+NUMRA Salon is a luxury **bridal****makeup**& hair salon located in **Lahore**.
+www.facebook.com/NumraMakeupS/
+
+2.[Makeup Studio (@zainabsharifmakeupstudio) - Instagram](https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.instagram.com%2Fzainabsharifmakeupstudio%2F&rut=5247)
+40K Followers - Zainab Sharif | **Makeup****Studio** Garden Town, **Lahore** 📞 0311-4857825
+www.instagram.com/zainabsharifmakeupstudio/
+
+3.[Next page](https://lite.duckduckgo.com/lite/?q=x&s=10)
+
+Links/Buttons:
+- [NUMRA - Makeup Studio & Salon | Lahore - Facebook](https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.facebook.com%2FNumraMakeupS%2F&rut=b229)
+`;
+const JINA_BING_MD = `Title: bridal makeup studio Lahore - Bing
+
+URL Source: https://www.bing.com/search?q=bridal%20makeup%20studio%20Lahore&mkt=en-PK&setlang=en
+
+Markdown Content:
+About 39,500 results
+
+1.   ## [Manam **Studio** — **Makeup Studio**& Salon | **Lahore**](https://www.bing.com/ck/a?!&&p=9564&ptn=3&ver=2&hsh=4&fclid=256c&u=a1aHR0cHM6Ly9tYW5hbXN0dWRpb2FuZHNhbG9uLmNvbS8&ntb=1)
+
+Manam Studio — Premium Makeup Studio & Salon in Lahore. Bridal Makeup, Hair Treatments, Facials & more at 994 Ravi Block, …
+
+2.   ## [Bridal Makeup Lahore - Iram Asif Beauty & Care](https://www.bing.com/ck/a?!&&p=f974&u=a1aHR0cHM6Ly9pcmFtYmVhdXR5c2Fsb24uY29tL2JyaWRhbC1tYWtldXAtbGFob3JlLw&ntb=1)
+
+We have transformed hundreds of brides across Lahore.
+
+Links/Buttons:
+- [2](https://www.bing.com/search?q=bridal+makeup&first=11&FORM=PERE)
+`;
+
+test('parses search result pages rendered by Jina Reader (DuckDuckGo Lite and Bing) and decodes redirect links', () => {
+  const ddg = websearch.parseJinaMarkdown(JINA_LITE_MD, websearch.decodeDdgUrl);
+  assert.deepEqual(ddg.map((r) => r.url), ['https://www.facebook.com/NumraMakeupS/', 'https://www.instagram.com/zainabsharifmakeupstudio/']);
+  assert.equal(ddg[0].title, 'NUMRA - Makeup Studio & Salon | Lahore - Facebook');
+  assert.match(ddg[0].snippet, /luxury bridal makeup & hair salon located in Lahore/);
+  assert.match(ddg[1].snippet, /0311-4857825/);
+  assert.equal(websearch.decodeBingUrl('https://www.bing.com/ck/a?!&&p=9564&u=a1aHR0cHM6Ly9tYW5hbXN0dWRpb2FuZHNhbG9uLmNvbS8&ntb=1'), 'https://manamstudioandsalon.com/');
+  assert.equal(websearch.decodeBingUrl('https://example.pk/page'), 'https://example.pk/page');
+  assert.equal(websearch.decodeBingUrl('https://www.bing.com/ck/a?u=zz'), null);
+  const bing = websearch.parseJinaMarkdown(JINA_BING_MD, websearch.decodeBingUrl);
+  assert.deepEqual(bing.map((r) => r.url), ['https://manamstudioandsalon.com/', 'https://irambeautysalon.com/bridal-makeup-lahore/']);
+  assert.equal(bing[0].title, 'Manam Studio — Makeup Studio & Salon | Lahore');
+  assert.match(bing[0].snippet, /994 Ravi Block/);
+});
+
+test('jina_reader engine answers when direct engines are blocked, and backs off on a Jina 429', async () => {
+  websearch.resetForTests();
+  const hits = [];
+  let jinaStatus = 200;
+  websearch.setFetchForTests(async (url) => {
+    hits.push(url);
+    if (/^https:\/\/r\.jina\.ai\//.test(url)) return { status: jinaStatus, headers: { get: (h) => (h === 'x-ratelimit-remaining' ? '17' : null) }, text: async () => (jinaStatus === 200 && /duckduckgo/.test(url) ? JINA_LITE_MD : jinaStatus === 200 ? JINA_BING_MD : 'rate limited') };
+    if (/duckduckgo/.test(url)) return { status: 403, text: async () => 'blocked' };
+    return { ok: true, status: 200, text: async () => '<?xml version="1.0"?><rss><channel></channel></rss>' }; // Bing RSS: empty feed
+  });
+  try {
+    const a = await websearch.search('bridal makeup Lahore', { count: 5 });
+    assert.equal(a.length, 2);
+    assert.equal(a[1].url, 'https://www.instagram.com/zainabsharifmakeupstudio/');
+    assert.ok(hits.some((h) => h.startsWith('https://r.jina.ai/https://lite.duckduckgo.com/lite/')), 'DuckDuckGo Lite was read through Jina Reader');
+    assert.equal(websearch.cache.get('bridal makeup Lahore|5').engine, 'jina_reader');
+    jinaStatus = 429;
+    const b = await websearch.search('second query', { count: 5 });
+    assert.deepEqual(b, [], 'Jina rate-limited and Bing RSS empty -> no results, no throw');
+    const d = await websearch.describe();
+    assert.ok(d.blocked.includes('duckduckgo') && d.blocked.includes('jina_reader'), 'blocked engines sit on cooldown: ' + JSON.stringify(d));
+    const jinaCalls = hits.filter((h) => h.startsWith('https://r.jina.ai/')).length;
+    await websearch.search('third query', { count: 5 });
+    assert.equal(hits.filter((h) => h.startsWith('https://r.jina.ai/')).length, jinaCalls, 'no Jina call while on cooldown');
+  } finally { websearch.setFetchForTests(null); websearch.resetForTests(); }
+});
+
+test('an engine that keeps answering nothing is demoted so the next engine gets tried first', async () => {
+  websearch.resetForTests();
+  const md = JINA_LITE_MD;
+  websearch.setFetchForTests(async (url) => {
+    if (/^https:\/\/r\.jina\.ai\//.test(url)) return { status: 200, headers: { get: () => null }, text: async () => md };
+    return { status: 200, text: async () => '<html><body>no results</body></html>' }; // direct DuckDuckGo: 200 but empty
+  });
+  try {
+    await websearch.search('q1', { count: 5 });
+    await websearch.search('q2', { count: 5 });
+    const d = await websearch.describe();
+    assert.ok(d.blocked.includes('duckduckgo'), 'duckduckgo demoted after two empty answers: ' + JSON.stringify(d));
+    assert.equal(d.engine, 'jina_reader');
+  } finally { websearch.setFetchForTests(null); websearch.resetForTests(); }
+});
+
+test('fetchPage falls back to Jina Reader when a site blocks direct fetches', async () => {
+  websearch.resetForTests();
+  websearch.setFetchForTests(async (url) => ({ status: 200, headers: { get: () => null }, text: async () => 'Title: Glow Studio Lahore\n\nURL Source: https://glowstudio.pk/\n\nMarkdown Content:\n# Glow Studio\n\nBridal makeup in Johar Town, Lahore. Call **0321-1112223** or [WhatsApp](https://wa.me/923211112223) · [Instagram](https://www.instagram.com/glowstudio.pk/)\n\nWe offer bridal makeup, party makeup, hair styling and facials. Bookings by appointment only, walk-ins on weekdays.' }));
+  evidence.setFetchForTests(async () => ({ ok: false, status: 403, url: 'https://glowstudio.pk/', headers: { get: () => 'text/html' }, text: async () => 'Forbidden' }));
+  try {
+    const none = await evidence.fetchPage('https://glowstudio.pk/');
+    assert.equal(none, null, 'no fallback unless allowed');
+    const budget = { left: 1 };
+    const page = await evidence.fetchPage('https://glowstudio.pk/', { jinaFallback: budget });
+    assert.ok(page, 'page read through Jina');
+    assert.equal(page.via, 'jina_reader');
+    assert.equal(page.title, 'Glow Studio Lahore');
+    assert.ok(page.phones.includes('923211112223'));
+    assert.ok(page.socials.some((s) => s.includes('instagram.com/glowstudio.pk')));
+    assert.match(page.text, /Johar Town/);
+    assert.equal(budget.left, 0);
+    assert.equal(await evidence.fetchPage('https://glowstudio.pk/', { jinaFallback: budget }), null, 'fallback budget exhausted');
+  } finally { websearch.setFetchForTests(null); evidence.setFetchForTests(null); websearch.resetForTests(); }
 });
 
 test('extracts Pakistani phone numbers, emails and social links from page text', () => {

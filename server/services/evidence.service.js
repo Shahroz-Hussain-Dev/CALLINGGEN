@@ -47,11 +47,27 @@ function htmlToText(html) {
   return { title: websearch.decodeEntities(title || ''), description: websearch.decodeEntities(desc || ''), text: s, links };
 }
 
-async function fetchPage(url) {
+/** Reads a page through Jina Reader (markdown) when the site refuses direct fetches from this network. */
+async function fetchPageViaJina(url) {
+  try {
+    const r = await websearch.readViaJina(url, { timeoutMs: config.evidence.pageTimeoutMs + 7000 });
+    if (r.status !== 200 || !r.text) return null;
+    const title = (/^Title:\s*(.+)$/m.exec(r.text) || [])[1] || '';
+    const body = r.text.split(/\nMarkdown Content:\n/)[1] || r.text;
+    const links = [...body.matchAll(/\((https?:\/\/[^)\s]+)\)/g)].map((m) => m[1]);
+    const text = websearch.decodeEntities(body.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[#*_>`]+/g, ' '));
+    const facts = extractFacts(body + '\n' + links.join('\n'));
+    return { url, title: websearch.decodeEntities(title), description: '', text: text.slice(0, config.evidence.maxPageChars), via: 'jina_reader', ...facts };
+  } catch (err) { return null; }
+}
+
+async function fetchPage(url, { jinaFallback } = {}) {
+  let blocked = false;
   try {
     const res = await fetchImpl(url, { headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'en-US,en;q=0.9' }, redirect: 'follow', signal: AbortSignal.timeout(config.evidence.pageTimeoutMs) });
     const ct = res.headers.get('content-type') || '';
-    if (!res.ok || !/text\/html|application\/xhtml/.test(ct)) return null;
+    if (!res.ok) blocked = res.status === 403 || res.status === 429 || res.status === 503 || res.status === 401;
+    if (!res.ok || !/text\/html|application\/xhtml/.test(ct)) { if (blocked && jinaFallback && jinaFallback.left > 0) { jinaFallback.left--; return fetchPageViaJina(url); } return null; }
     const reader = res.body && res.body.getReader ? res.body.getReader() : null;
     let html = '';
     if (reader) {
@@ -61,8 +77,12 @@ async function fetchPage(url) {
     } else html = (await res.text()).slice(0, config.evidence.maxPageBytes);
     const parsed = htmlToText(html);
     const facts = extractFacts(html + '\n' + parsed.links.join('\n'));
+    if (parsed.text.length < 100 && /cloudflare|enable javascript|access denied|attention required|just a moment/i.test(html) && jinaFallback && jinaFallback.left > 0) { jinaFallback.left--; return fetchPageViaJina(url); }
     return { url: res.url || url, title: parsed.title, description: parsed.description, text: parsed.text.slice(0, config.evidence.maxPageChars), ...facts };
-  } catch (err) { return null; }
+  } catch (err) {
+    if (jinaFallback && jinaFallback.left > 0 && !/abort|timeout/i.test(err.name + err.message)) { jinaFallback.left--; return fetchPageViaJina(url); }
+    return null;
+  }
 }
 
 /** Gathers evidence for one niche/city. Returns { queries, results, pages, corpus, phones, urls, elapsed_ms }. */
@@ -83,11 +103,12 @@ async function gather({ panel, niche, city, timeBudgetMs = config.evidence.timeB
   const fetchable = results.filter((r) => !NO_FETCH_HOSTS.test(r.host)).slice(0, maxPages);
   const pages = [];
   const concurrency = 4;
+  const jinaFallback = { left: config.evidence.jinaPageFallbacks };
   let idx = 0;
   async function worker() {
     while (idx < fetchable.length && Date.now() - started < timeBudgetMs) {
       const r = fetchable[idx++];
-      const page = await fetchPage(r.url);
+      const page = await fetchPage(r.url, { jinaFallback });
       if (page && page.text.length > 100) pages.push(page);
     }
   }
@@ -208,7 +229,8 @@ async function gatherForBusiness({ name, city, timeBudgetMs = config.evidence.ti
   const relevant = results.filter((r) => norm.normalizeBusinessName(`${r.title} ${r.snippet}`).includes(n) || norm.nameSimilarity(n, norm.normalizeBusinessName(r.title)) >= 0.7);
   const fetchable = (relevant.length ? relevant : results).filter((r) => !NO_FETCH_HOSTS.test(r.host)).slice(0, maxPages);
   const pages = [];
-  for (const r of fetchable) { if (Date.now() - started > timeBudgetMs) break; const page = await fetchPage(r.url); if (page && page.text.length > 200) pages.push(page); }
+  const jinaFallback = { left: config.evidence.jinaPageFallbacks };
+  for (const r of fetchable) { if (Date.now() - started > timeBudgetMs) break; const page = await fetchPage(r.url, { jinaFallback }); if (page && page.text.length > 200) pages.push(page); }
   const snippetText = results.map((r) => `${r.title} ${r.snippet} ${r.url}`).join('\n');
   const corpus = (snippetText + '\n' + pages.map((p) => `${p.url}\n${p.title}\n${p.description}\n${p.text}`).join('\n')).toLowerCase();
   const phones = new Set(extractFacts(snippetText).phones); for (const p of pages) for (const ph of p.phones) phones.add(ph);
@@ -216,4 +238,4 @@ async function gatherForBusiness({ name, city, timeBudgetMs = config.evidence.ti
   return { queries, results, pages, corpus, phones, urls, elapsed_ms: Date.now() - started };
 }
 
-module.exports = { gather, gatherForBusiness, render, verifyLead, buildQueries, extractFacts, htmlToText, fetchPage, setFetchForTests, nameInCorpus };
+module.exports = { gather, gatherForBusiness, render, verifyLead, buildQueries, extractFacts, htmlToText, fetchPage, fetchPageViaJina, setFetchForTests, nameInCorpus };

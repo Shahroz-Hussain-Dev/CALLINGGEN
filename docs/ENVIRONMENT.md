@@ -47,7 +47,10 @@ to the browser.
 ## Free built-in web research (evidence mode)
 | Variable | Description |
 |---|---|
-| `WEB_SEARCH_ENGINE` | Preferred engine: `duckduckgo` (default) / `bing` (key-less, blocked from Vercel's network) / `serper` / `jina` / `tavily` / `brave` / `google_cse`. Engines with a configured key are always tried before the key-less ones; blocked or empty engines fail over automatically. |
+| `WEB_SEARCH_ENGINE` | Preferred key-less engine: `duckduckgo` (default; direct, blocked from Vercel's network) / `jina_reader` (DuckDuckGo Lite and Bing result pages rendered by the key-less Jina Reader proxy, works from Vercel; set this on Vercel) / `bing` (RSS). Engines with a configured key (`serper`, `brave`, `google_cse`, `tavily`, `jina`) are always tried first; blocked, rate-limited or repeatedly empty engines are put on cooldown and the next one is used. |
+| `JINA_MIN_GAP_MS` | Spacing between key-less Jina Reader calls (default 3200 ms, i.e. under its 20 requests/minute limit). A `JINA_API_KEY` raises that limit. |
+| `JINA_RATE_LIMIT_COOLDOWN_MS` | Cooldown after a Jina Reader HTTP 429 (default 90000). |
+| `EVIDENCE_JINA_PAGE_FALLBACKS` | Pages per batch re-read through Jina Reader when a site refuses direct fetches (default 3). |
 | `SERPER_API_KEY` | Serper.dev key (Google results; 2,500 free searches, no card). Also enables Google Places verification. **Recommended.** |
 | `JINA_API_KEY` / `TAVILY_API_KEY` / `BRAVE_SEARCH_API_KEY` | Alternative search APIs with free tiers. |
 | `GOOGLE_CSE_API_KEY` + `GOOGLE_CSE_ID` | Google Programmable Search JSON API (100 free queries/day). |

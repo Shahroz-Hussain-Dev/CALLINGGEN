@@ -77,9 +77,9 @@ See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for the step-by-step guide. Sum
    `DATABASE_URL=<supabase url> npm run migrate && DATABASE_URL=<supabase url> npm run seed`.
 4. Deploy. `vercel.json` routes `/api/*` to the serverless API, serves `public/` as static
    files, and registers the daily rotation cron (`5 19 * * *` UTC = 00:05 Pakistan time).
-5. Sign in, open **Settings → AI configuration → Test API connection**. On a free-tier Gemini key, also paste
-   one free search API key (Serper recommended) in **Settings → System configuration → Web research API keys**
-   and click *Test web research*. Then generate the first lists.
+5. Sign in, open **Settings → AI configuration → Test API connection**, then **Settings → System
+   configuration → Test web research** (works key-less; an optional free Serper key upgrades it to Google
+   results). Then generate the first lists.
 
 ---
 
@@ -103,10 +103,12 @@ See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for the step-by-step guide. Sum
    facts from the report. With the Anthropic provider the same rules apply through Claude's web search
    and a strict `submit_leads` tool.
    **Free mode (no paid grounding needed):** when the Gemini key has no Google-grounding quota (free
-   tier), the app runs its own web research: six web searches per niche and city (Serper/Jina/Tavily/
-   Google Programmable Search with a free key, or DuckDuckGo/Bing where those are not blocked), reads up to eight
-   of the resulting pages (directories, salon and company websites; social pages via their search
-   snippets), extracts phone numbers, emails and social links, and gives that evidence bundle to the
+   tier), the app runs its own web research: six web searches per niche and city (key-less: DuckDuckGo
+   directly, or DuckDuckGo Lite / Bing result pages rendered through the key-less Jina Reader proxy where
+   the search engines block the server's network, as on Vercel; optional free Serper/Jina/Tavily/Google
+   Programmable Search keys are tried first), reads up to eight of the resulting pages (directories,
+   salon and company websites, re-read through Jina Reader when a site blocks the server; social pages
+   via their search snippets), extracts phone numbers, emails and social links, and gives that evidence bundle to the
    model in a single strict-JSON call. The server then verifies every returned fact against the evidence:
    a phone, website, email, social profile or person name that does not appear in the gathered pages is
    removed, and a business whose name is not in the evidence is rejected. Leads therefore carry real
