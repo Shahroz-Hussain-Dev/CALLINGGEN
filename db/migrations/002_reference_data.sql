@@ -1,0 +1,146 @@
+-- ============================================================================
+-- Reference data: exact niche lists from the LATechS specification and
+-- default system settings. Idempotent (ON CONFLICT DO NOTHING).
+-- ============================================================================
+
+-- Strategy Leads niches (Panel A)
+INSERT INTO niches (panel, category, name, sort_order) VALUES
+  ('strategy', NULL, 'Ladies'' Beauty Salons', 1),
+  ('strategy', NULL, 'Bridal Makeup Studios', 2),
+  ('strategy', NULL, 'Makeup Artists with Private Studios', 3),
+  ('strategy', NULL, 'Skin Care Clinics', 4),
+  ('strategy', NULL, 'Laser Hair Removal Clinics', 5),
+  ('strategy', NULL, 'Aesthetic Clinics', 6),
+  ('strategy', NULL, 'Women''s Hair Salons', 7),
+  ('strategy', NULL, 'Nail Art Studios', 8),
+  ('strategy', NULL, 'Eyelash and Eyebrow Studios', 9),
+  ('strategy', NULL, 'Facial and Waxing Studios', 10),
+  ('strategy', NULL, 'Women''s Wellness Centers', 11),
+  ('strategy', NULL, 'Yoga Studios', 12),
+  ('strategy', NULL, 'Pilates Studios', 13),
+  ('strategy', NULL, 'Women''s Fitness Studios', 14),
+  ('strategy', NULL, 'Female Physiotherapy Clinics', 15),
+  ('strategy', NULL, 'Women''s Nutrition and Diet Clinics', 16),
+  ('strategy', NULL, 'Female Psychologists and Counseling Clinics', 17),
+  ('strategy', NULL, 'Women''s Dental Clinics', 18),
+  ('strategy', NULL, 'Maternity and Gynecology Clinics', 19),
+  ('strategy', NULL, 'Female Dermatology Clinics', 20),
+  ('strategy', NULL, 'Hijama and Cupping Therapy Centers', 21),
+  ('strategy', NULL, 'Massage and Spa Studios', 22),
+  ('strategy', NULL, 'Women''s Personal Training Studios', 23),
+  ('strategy', NULL, 'Female Speech Therapy Clinics', 24),
+  ('strategy', NULL, 'Women''s Occupational Therapy Clinics', 25),
+  ('strategy', NULL, 'Boutique Fashion Consultation Studios', 26),
+  ('strategy', NULL, 'Personal Styling and Image Consultation Studios', 27),
+  ('strategy', NULL, 'Women''s Photography Studios', 28),
+  ('strategy', NULL, 'Henna and Mehndi Studios', 29),
+  ('strategy', NULL, 'Private Cooking and Baking Class Studios', 30)
+ON CONFLICT DO NOTHING;
+
+-- Service Sales niches (Panel B)
+INSERT INTO niches (panel, category, name, sort_order) VALUES
+  ('service', 'Calling & Telemarketing Businesses', 'Call Centers', 101),
+  ('service', 'Calling & Telemarketing Businesses', 'Telemarketing Companies', 102),
+  ('service', 'Calling & Telemarketing Businesses', 'Outbound Sales Call Centers', 103),
+  ('service', 'Calling & Telemarketing Businesses', 'Customer Support Call Centers', 104),
+  ('service', 'Calling & Telemarketing Businesses', 'Appointment Setting Companies', 105),
+  ('service', 'Calling & Telemarketing Businesses', 'Lead Generation Companies', 106),
+  ('service', 'Calling & Telemarketing Businesses', 'Debt Collection Agencies', 107),
+  ('service', 'Calling & Telemarketing Businesses', 'Survey and Market Research Companies', 108),
+  ('service', 'Calling & Telemarketing Businesses', 'Virtual Receptionist Services', 109),
+  ('service', 'Calling & Telemarketing Businesses', 'Customer Verification and Confirmation Services', 110),
+
+  ('service', 'Social Media & Marketing Businesses', 'Social Media Management Companies', 201),
+  ('service', 'Social Media & Marketing Businesses', 'Social Media Content Creation Businesses', 202),
+  ('service', 'Social Media & Marketing Businesses', 'Influencer Marketing Companies', 203),
+  ('service', 'Social Media & Marketing Businesses', 'Digital Advertising Management Businesses', 204),
+  ('service', 'Social Media & Marketing Businesses', 'Public Relations and Media Management Firms', 205),
+  ('service', 'Social Media & Marketing Businesses', 'YouTube Channel Management Businesses', 206),
+  ('service', 'Social Media & Marketing Businesses', 'E-commerce Social Media Management Services', 207),
+  ('service', 'Social Media & Marketing Businesses', 'Personal Brand Management Businesses', 208),
+  ('service', 'Social Media & Marketing Businesses', 'Online Reputation Management Companies', 209),
+  ('service', 'Social Media & Marketing Businesses', 'Content Writing and Copywriting Businesses', 210),
+
+  ('service', 'Sales & Lead Management Businesses', 'Real Estate Sales Teams', 301),
+  ('service', 'Sales & Lead Management Businesses', 'Insurance Sales Offices', 302),
+  ('service', 'Sales & Lead Management Businesses', 'Property Dealers and Real Estate Brokerages', 303),
+  ('service', 'Sales & Lead Management Businesses', 'Solar Panel Sales Companies', 304),
+  ('service', 'Sales & Lead Management Businesses', 'Car Dealership Sales Teams', 305),
+  ('service', 'Sales & Lead Management Businesses', 'Educational Consultancy Sales Offices', 306),
+  ('service', 'Sales & Lead Management Businesses', 'Overseas Recruitment Agencies', 307),
+  ('service', 'Sales & Lead Management Businesses', 'Travel Package Sales Companies', 308),
+  ('service', 'Sales & Lead Management Businesses', 'B2B Sales Outsourcing Companies', 309),
+  ('service', 'Sales & Lead Management Businesses', 'Corporate Training Sales Businesses', 310),
+
+  ('service', 'Recruitment & HR Businesses', 'Recruitment Agencies', 401),
+  ('service', 'Recruitment & HR Businesses', 'Staffing Agencies', 402),
+  ('service', 'Recruitment & HR Businesses', 'Overseas Employment Agencies', 403),
+  ('service', 'Recruitment & HR Businesses', 'Executive Search Firms', 404),
+  ('service', 'Recruitment & HR Businesses', 'Domestic Staff Recruitment Agencies', 405),
+  ('service', 'Recruitment & HR Businesses', 'Temporary Staffing Companies', 406),
+  ('service', 'Recruitment & HR Businesses', 'HR Outsourcing Companies', 407),
+  ('service', 'Recruitment & HR Businesses', 'Interview Scheduling and Hiring Services', 408),
+
+  ('service', 'Education & Training Businesses', 'Private Academies', 501),
+  ('service', 'Education & Training Businesses', 'Online Tuition Businesses', 502),
+  ('service', 'Education & Training Businesses', 'IELTS and Language Training Centers', 503),
+  ('service', 'Education & Training Businesses', 'Study Abroad Consultancy Offices', 504),
+  ('service', 'Education & Training Businesses', 'Online Coaching Businesses', 505),
+  ('service', 'Education & Training Businesses', 'Professional Training Institutes', 506),
+  ('service', 'Education & Training Businesses', 'Test Preparation Centers', 507),
+  ('service', 'Education & Training Businesses', 'Corporate Training Providers', 508),
+
+  ('service', 'E-commerce & Customer Service Businesses', 'E-commerce Stores with Customer Support Teams', 601),
+  ('service', 'E-commerce & Customer Service Businesses', 'Online Clothing Brands', 602),
+  ('service', 'E-commerce & Customer Service Businesses', 'Online Cosmetics Stores', 603),
+  ('service', 'E-commerce & Customer Service Businesses', 'Online Electronics Stores', 604),
+  ('service', 'E-commerce & Customer Service Businesses', 'Order Management and Fulfillment Businesses', 605),
+  ('service', 'E-commerce & Customer Service Businesses', 'Product Reselling Businesses', 606),
+  ('service', 'E-commerce & Customer Service Businesses', 'WhatsApp-Based Online Stores', 607),
+  ('service', 'E-commerce & Customer Service Businesses', 'Customer Support Outsourcing Businesses', 608),
+
+  ('service', 'Travel & Hospitality Businesses', 'Travel Agencies', 701),
+  ('service', 'Travel & Hospitality Businesses', 'Tour Operators', 702),
+  ('service', 'Travel & Hospitality Businesses', 'Umrah and Hajj Travel Agencies', 703),
+  ('service', 'Travel & Hospitality Businesses', 'Hotel Reservation Agencies', 704),
+  ('service', 'Travel & Hospitality Businesses', 'Airline Ticketing Agencies', 705),
+  ('service', 'Travel & Hospitality Businesses', 'Visa Consultancy Offices', 706),
+
+  ('service', 'Financial & Administrative Service Businesses', 'Accounting and Bookkeeping Firms', 801),
+  ('service', 'Financial & Administrative Service Businesses', 'Tax Consultancy Offices', 802),
+  ('service', 'Financial & Administrative Service Businesses', 'Insurance Brokerage Offices', 803),
+  ('service', 'Financial & Administrative Service Businesses', 'Loan Consultancy Businesses', 804),
+  ('service', 'Financial & Administrative Service Businesses', 'Billing and Data Entry Outsourcing Companies', 805),
+  ('service', 'Financial & Administrative Service Businesses', 'Virtual Assistant Service Providers', 806),
+  ('service', 'Financial & Administrative Service Businesses', 'Document Processing Businesses', 807),
+  ('service', 'Financial & Administrative Service Businesses', 'Payroll Outsourcing Companies', 808),
+
+  ('service', 'Logistics & Operations Businesses', 'Logistics and Freight Forwarding Companies', 901),
+  ('service', 'Logistics & Operations Businesses', 'Courier and Delivery Companies', 902),
+  ('service', 'Logistics & Operations Businesses', 'Transport Booking Companies', 903),
+  ('service', 'Logistics & Operations Businesses', 'Moving and Relocation Companies', 904),
+  ('service', 'Logistics & Operations Businesses', 'Fleet Management Businesses', 905),
+  ('service', 'Logistics & Operations Businesses', 'Dispatching Companies', 906),
+  ('service', 'Logistics & Operations Businesses', 'Warehousing and Distribution Businesses', 907),
+
+  ('service', 'Event & Customer Coordination Businesses', 'Event Management Companies', 1001),
+  ('service', 'Event & Customer Coordination Businesses', 'Wedding Planning Businesses', 1002),
+  ('service', 'Event & Customer Coordination Businesses', 'Corporate Event Organizers', 1003),
+  ('service', 'Event & Customer Coordination Businesses', 'Catering Businesses with Booking Teams', 1004),
+  ('service', 'Event & Customer Coordination Businesses', 'Conference and Exhibition Organizers', 1005),
+  ('service', 'Event & Customer Coordination Businesses', 'Wedding Photography Businesses with Sales Teams', 1006),
+  ('service', 'Event & Customer Coordination Businesses', 'Event Ticketing and Registration Businesses', 1007)
+ON CONFLICT DO NOTHING;
+
+-- Default system settings (admin editable in Settings -> System configuration)
+INSERT INTO system_settings (key, value) VALUES
+  ('rotation_interval_days', '3'::jsonb),
+  ('list_size', '50'::jsonb),
+  ('list_max_rotations', '2'::jsonb),
+  ('rotation_enabled', 'true'::jsonb),
+  ('auto_generate_after_rotation', 'true'::jsonb),
+  ('generation_batch_size', '5'::jsonb),
+  ('timezone', '"Asia/Karachi"'::jsonb),
+  ('target_cities', '["Karachi","Lahore","Islamabad","Rawalpindi","Faisalabad","Multan","Peshawar","Gujranwala","Sialkot","Hyderabad","Bahawalpur","Abbottabad"]'::jsonb),
+  ('default_meeting_duration_minutes', '60'::jsonb)
+ON CONFLICT (key) DO NOTHING;

@@ -1,0 +1,138 @@
+import { api } from '../api.js';
+import { el, esc, html, raw, join, toast, badge, setBusy, formValues, fmtDateTime, confirmDialog, emptyState, modal } from '../ui.js';
+import { state } from '../app.js';
+
+export async function renderSettings(root, tab) {
+  const isOwner = state.user.role === 'owner';
+  const tabs = [['account', 'Account'], ['claude', 'Claude API'], ['niches', 'Niche preferences'], ['preferences', 'Lead generation'], ['notifications', 'Notifications']];
+  if (isOwner) tabs.push(['manage-niches', 'Niche management'], ['users', 'User management'], ['system', 'System configuration'], ['status', 'Database & generation status'], ['audit', 'Audit log']);
+  const active = tabs.find((t) => t[0] === tab) ? tab : 'account';
+  root.innerHTML = html`<div class="tabs">${join(tabs, ([k, l]) => html`<button class="${active === k ? 'active' : ''}" data-tab="${k}">${l}</button>`)}</div><div id="tabBody"><div class="loading"><span class="spinner"></span></div></div>`;
+  root.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => { location.hash = `#/settings/${b.dataset.tab}`; }));
+  const body = root.querySelector('#tabBody');
+  const s = await api.get('/api/settings');
+  const R = { account, claude, niches, preferences, notifications, 'manage-niches': manageNiches, users, system, status, audit };
+  await R[active](body, s);
+}
+
+async function account(body, s) {
+  const u = s.user;
+  body.innerHTML = html`<div class="grid grid-2"><div class="card"><div class="card-head"><h2>Account information</h2></div><dl class="kv"><dt>Username</dt><dd>${u.username}</dd><dt>Display name</dt><dd>${u.display_name}</dd><dt>Role</dt><dd>${u.role === 'owner' ? 'Owner / Administrator' : 'Employee'}</dd><dt>Status</dt><dd>${u.account_status}</dd><dt>Last login</dt><dd>${fmtDateTime(u.last_login_at)}</dd><dt>Rotation position</dt><dd>#${u.rotation_order}</dd></dl></div>
+    <div class="card"><div class="card-head"><h2>Change password</h2></div>${u.must_change_password ? raw('<div class="warn-box mb-2">You are still using an initial password. Please set a personal one.</div>') : raw('')}
+      <form id="pwForm" class="col"><label class="field"><span>Current password</span><input type="password" name="current_password" autocomplete="current-password" required></label><label class="field"><span>New password (min 6 characters)</span><input type="password" name="new_password" autocomplete="new-password" required minlength="6"></label><label class="field"><span>Confirm new password</span><input type="password" name="confirm" autocomplete="new-password" required></label><div><button class="btn primary" type="submit">Update password</button></div></form></div></div>`;
+  body.querySelector('#pwForm').addEventListener('submit', async (e) => {
+    e.preventDefault(); const v = formValues(e.target);
+    if (v.new_password !== v.confirm) { toast('New passwords do not match', 'error'); return; }
+    const btn = e.target.querySelector('button'); setBusy(btn, true, 'Saving…');
+    try { await api.post('/api/me/password', v); toast('Password updated', 'success'); state.user.must_change_password = false; e.target.reset(); } catch (er) { toast(er.message, 'error'); }
+    setBusy(btn, false);
+  });
+}
+
+async function claude(body, s) {
+  const c = s.claude;
+  const render = (c2) => {
+    body.innerHTML = html`<div class="grid grid-2"><div class="card"><div class="card-head"><h2>Claude API configuration</h2>${raw(badge(c2.active_source === 'none' ? 'Not configured' : c2.active_source === 'user' ? 'Using your key' : 'Using server key', c2.active_source === 'none' ? 'danger' : 'success'))}</div>
+      <p class="small muted">Keys are stored encrypted on the server and never sent back to the browser. If you save a personal key it is used for your lead generation and research; otherwise the server-wide key (ANTHROPIC_API_KEY) is used.</p>
+      <dl class="kv"><dt>Your key</dt><dd>${c2.has_user_key ? raw(`•••• ${esc(c2.user_key_last4)} ${badge(c2.user_key_status, c2.user_key_status === 'valid' ? 'success' : c2.user_key_status === 'invalid' ? 'danger' : 'neutral')}`) : 'none saved'}</dd><dt>Server key</dt><dd>${c2.server_key_configured ? 'configured' : 'not configured'}</dd><dt>Model</dt><dd>${c2.model}</dd><dt>Web search</dt><dd>${c2.search && c2.search.claude_web_search ? 'enabled (Claude verifies businesses online)' : 'disabled'} · business-data provider: ${c2.search ? c2.search.provider : 'none'}${c2.search && c2.search.provider !== 'none' && !c2.search.enabled ? ' (key missing)' : ''}</dd><dt>Encryption</dt><dd>${c2.encryption_configured ? 'APP_ENCRYPTION_KEY set' : raw('<span class="badge danger">APP_ENCRYPTION_KEY missing — personal keys cannot be saved</span>')}</dd><dt>Last test</dt><dd>${c2.last_tested_at ? `${fmtDateTime(c2.last_tested_at)} · ${c2.last_test_result && c2.last_test_result.ok ? 'OK' : 'failed'}` : 'never'}</dd></dl>
+      <form id="keyForm" class="col mt-2"><label class="field"><span>${c2.has_user_key ? 'Update' : 'Save'} your Anthropic API key</span><input type="password" name="api_key" placeholder="sk-ant-…" autocomplete="off"></label><div class="flex flex-wrap"><button class="btn primary" type="submit">${c2.has_user_key ? 'Update API key' : 'Save API key'}</button>${c2.has_user_key ? raw('<button class="btn danger" type="button" id="removeKey">Remove my key</button>') : raw('')}</div></form></div>
+      <div class="card"><div class="card-head"><h2>API connection status</h2></div><p class="small muted">Sends a tiny test request to Claude using the active key.</p><button class="btn" id="testBtn">Test API connection</button><div id="testOut" class="mt-2"></div></div></div>`;
+    body.querySelector('#keyForm').addEventListener('submit', async (e) => { e.preventDefault(); const btn = e.target.querySelector('button[type=submit]'); setBusy(btn, true, 'Saving…'); try { const r = await api.post('/api/claude/key', formValues(e.target)); toast('API key saved (encrypted)', 'success'); render({ ...r, search: c2.search }); } catch (er) { toast(er.message, 'error', 7000); setBusy(btn, false); } });
+    const rm = body.querySelector('#removeKey'); if (rm) rm.addEventListener('click', async () => { if (!(await confirmDialog({ title: 'Remove API key', message: 'Remove your personal Claude API key? The server key (if configured) will be used instead.', confirmText: 'Remove', danger: true }))) return; try { const r = await api.del('/api/claude/key'); toast('Key removed', 'success'); render({ ...r, search: c2.search }); } catch (er) { toast(er.message, 'error'); } });
+    body.querySelector('#testBtn').addEventListener('click', async (e) => { setBusy(e.target, true, 'Testing…'); const out = body.querySelector('#testOut'); try { const r = await api.post('/api/claude/test'); out.innerHTML = r.ok ? `<div class="success-box">Connected · model ${esc(r.model)} · ${r.latency_ms} ms · key source: ${esc(r.key_source)}</div>` : `<div class="error-box">Connection failed (${esc(r.error.code)}): ${esc(r.error.message)}</div>`; } catch (er) { out.innerHTML = `<div class="error-box">${esc(er.message)}</div>`; } setBusy(e.target, false); });
+  };
+  render(c);
+}
+
+async function niches(body, s) {
+  const [st, sv] = await Promise.all([api.get('/api/niches?panel=strategy'), api.get('/api/niches?panel=service')]);
+  const us = s.user_settings;
+  const chips = (items, name, selected, cls) => { return html`${join(Object.entries(items.reduce((g, n) => { (g[n.category || ''] = g[n.category || ''] || []).push(n); return g; }, {})), ([g, arr]) => html`${g ? html`<h4 class="mt-2">${g}</h4>` : raw('')}<div class="chips mb-2">${join(arr, (n) => html`<label class="chip ${cls} ${selected.includes(n.id) ? 'on' : ''}"><input type="checkbox" name="${name}" value="${n.id}" ${selected.includes(n.id) ? 'checked' : ''}>${n.name}</label>`)}</div>`)}`; };
+  body.innerHTML = html`<div class="card"><div class="card-head"><h2>Selected niches</h2><span class="small muted">Pre-selected when you generate contacts and used for automatic lists after rotation. Leave empty to use all niches.</span></div>
+    <form id="nForm"><h3 class="mt-2">Strategy Leads</h3>${chips(st.items, 'selected_strategy_niches', us.selected_strategy_niches || [], 'strategy')}<h3 class="mt-3">Service Sales Leads</h3>${chips(sv.items, 'selected_service_niches', us.selected_service_niches || [], 'service')}<div class="mt-3"><button class="btn primary" type="submit">Save niche preferences</button></div></form></div>`;
+  body.querySelectorAll('.chip input').forEach((i) => i.addEventListener('change', () => i.parentElement.classList.toggle('on', i.checked)));
+  body.querySelector('#nForm').addEventListener('submit', async (e) => { e.preventDefault(); const payload = { selected_strategy_niches: [...e.target.querySelectorAll('[name=selected_strategy_niches]:checked')].map((i) => i.value), selected_service_niches: [...e.target.querySelectorAll('[name=selected_service_niches]:checked')].map((i) => i.value) }; try { await api.patch('/api/settings/user', payload); toast('Niche preferences saved', 'success'); } catch (er) { toast(er.message, 'error'); } });
+}
+
+async function preferences(body, s) {
+  const p = s.user_settings.lead_generation_preferences || {};
+  body.innerHTML = html`<div class="card" style="max-width:640px"><div class="card-head"><h2>Lead generation preferences</h2></div><form id="pForm" class="form-grid">
+    <label class="field"><span>Default number of contacts per list</span><input type="number" name="default_count" min="1" max="50" value="${p.default_count || 50}"></label>
+    <label class="field"><span>Preferred cities (comma separated, optional)</span><input type="text" name="preferred_cities" value="${(p.preferred_cities || []).join(', ')}" placeholder="Lahore, Karachi"></label>
+    <label class="field span-2"><span>Notes for research (optional, added context for Claude)</span><textarea name="research_notes" placeholder="e.g. Focus on DHA and Gulberg areas; prefer businesses with 3+ staff">${p.research_notes || ''}</textarea></label>
+    <div class="span-2"><button class="btn primary" type="submit">Save preferences</button></div></form></div>`;
+  body.querySelector('#pForm').addEventListener('submit', async (e) => { e.preventDefault(); const v = formValues(e.target); const payload = { lead_generation_preferences: { default_count: Math.max(1, Math.min(50, parseInt(v.default_count, 10) || 50)), preferred_cities: v.preferred_cities.split(',').map((x) => x.trim()).filter(Boolean), research_notes: v.research_notes } }; try { await api.patch('/api/settings/user', payload); toast('Preferences saved', 'success'); } catch (er) { toast(er.message, 'error'); } });
+}
+
+async function notifications(body, s) {
+  const n = s.user_settings.notification_preferences || {};
+  body.innerHTML = html`<div class="card" style="max-width:560px"><div class="card-head"><h2>Notification preferences</h2></div><form id="nfForm" class="col">
+    <label class="check"><input type="checkbox" name="follow_up_reminders" ${n.follow_up_reminders !== false ? 'checked' : ''}> Highlight due follow-ups on my overview</label>
+    <label class="check"><input type="checkbox" name="rotation_alerts" ${n.rotation_alerts !== false ? 'checked' : ''}> Show rotation countdown warnings in the header</label>
+    <label class="check"><input type="checkbox" name="meeting_reminders" ${n.meeting_reminders !== false ? 'checked' : ''}> Show upcoming meetings on my overview</label>
+    <label class="check"><input type="checkbox" name="generation_toasts" ${n.generation_toasts !== false ? 'checked' : ''}> Notify me when contact generation finishes</label>
+    <div><button class="btn primary" type="submit">Save notification preferences</button></div></form></div>`;
+  body.querySelector('#nfForm').addEventListener('submit', async (e) => { e.preventDefault(); try { await api.patch('/api/settings/user', { notification_preferences: formValues(e.target) }); toast('Saved', 'success'); } catch (er) { toast(er.message, 'error'); } });
+}
+
+async function manageNiches(body) {
+  const load = async () => {
+    const r = await api.get('/api/niches?include_inactive=true');
+    body.innerHTML = html`<div class="grid grid-2"><div class="card"><div class="card-head"><h2>Add a niche</h2></div><form id="addN" class="col"><label class="field"><span>Panel</span><select name="panel"><option value="strategy">Strategy Leads</option><option value="service">Service Sales Leads</option></select></label><label class="field"><span>Niche name</span><input type="text" name="name" required minlength="3"></label><label class="field"><span>Category (service panel groups, optional)</span><input type="text" name="category" placeholder="e.g. Travel & Hospitality Businesses"></label><div><button class="btn primary" type="submit">Add niche</button></div></form><p class="small muted mt-2">New niches become available immediately in both generation and preferences — no code changes needed.</p></div>
+      <div class="card"><div class="card-head"><h2>Existing niches (${r.items.length})</h2></div><div class="table-wrap" style="max-height:520px;overflow:auto"><table><thead><tr><th>Panel</th><th>Name</th><th>Category</th><th>Active</th><th></th></tr></thead><tbody>${join(r.items, (n) => html`<tr><td>${raw(badge(n.panel, n.panel))}</td><td>${n.name}</td><td class="small muted">${n.category || '—'}</td><td>${raw(badge(n.is_active ? 'active' : 'inactive', n.is_active ? 'success' : 'neutral'))}</td><td class="nowrap"><button class="btn xs" data-ren="${n.id}">Rename</button> <button class="btn xs ghost" data-tog="${n.id}" data-on="${n.is_active}">${n.is_active ? 'Deactivate' : 'Activate'}</button></td></tr>`)}</tbody></table></div></div></div>`;
+    body.querySelector('#addN').addEventListener('submit', async (e) => { e.preventDefault(); try { await api.post('/api/niches', formValues(e.target)); toast('Niche added', 'success'); load(); } catch (er) { toast(er.message, 'error'); } });
+    body.querySelectorAll('[data-tog]').forEach((b) => b.addEventListener('click', async () => { try { await api.patch(`/api/niches/${b.dataset.tog}`, { is_active: b.dataset.on !== 'true' }); load(); } catch (er) { toast(er.message, 'error'); } }));
+    body.querySelectorAll('[data-ren]').forEach((b) => b.addEventListener('click', async () => { const { promptDialog } = await import('../ui.js'); const name = await promptDialog({ title: 'Rename niche', label: 'New name', multiline: false, confirmText: 'Rename' }); if (!name) return; try { await api.patch(`/api/niches/${b.dataset.ren}`, { name }); load(); } catch (er) { toast(er.message, 'error'); } }));
+  };
+  await load();
+}
+
+async function users(body) {
+  const load = async () => {
+    const r = await api.get('/api/admin/users');
+    body.innerHTML = html`<div class="card"><div class="card-head"><h2>User management</h2><span class="small muted">Three fixed accounts: Amman, Fizza (employees) and Shahroz (owner)</span></div><div class="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Rotation</th><th>Last login</th><th>Actions</th></tr></thead><tbody>${join(r.items, (u) => html`<tr><td><b>${u.display_name}</b><span class="sub">${u.username}${u.must_change_password ? ' · initial password' : ''}</span></td><td>${u.role}</td><td>${raw(badge(u.account_status, u.account_status === 'active' ? 'success' : 'danger'))}</td><td>#${u.rotation_order} · ${u.participates_in_rotation ? 'participates' : 'excluded'}</td><td>${fmtDateTime(u.last_login_at)}</td><td class="nowrap"><button class="btn xs" data-pw="${u.id}">Reset password</button> ${u.id !== state.user.id ? raw(`<button class="btn xs ghost" data-st="${u.id}" data-v="${u.account_status === 'active' ? 'disabled' : 'active'}">${u.account_status === 'active' ? 'Disable' : 'Enable'}</button> <button class="btn xs ghost" data-rot="${u.id}" data-v="${!u.participates_in_rotation}">${u.participates_in_rotation ? 'Exclude from rotation' : 'Include in rotation'}</button>`) : raw('')}</td></tr>`)}</tbody></table></div></div>`;
+    body.querySelectorAll('[data-pw]').forEach((b) => b.addEventListener('click', async () => { const { promptDialog } = await import('../ui.js'); const pw = await promptDialog({ title: 'Reset password', label: 'New password (min 6 characters). The user will be asked to change it.', multiline: false, confirmText: 'Reset' }); if (!pw) return; try { await api.patch(`/api/admin/users/${b.dataset.pw}`, { new_password: pw }); toast('Password reset', 'success'); load(); } catch (er) { toast(er.message, 'error'); } }));
+    body.querySelectorAll('[data-st]').forEach((b) => b.addEventListener('click', async () => { try { await api.patch(`/api/admin/users/${b.dataset.st}`, { account_status: b.dataset.v }); load(); } catch (er) { toast(er.message, 'error'); } }));
+    body.querySelectorAll('[data-rot]').forEach((b) => b.addEventListener('click', async () => { try { await api.patch(`/api/admin/users/${b.dataset.rot}`, { participates_in_rotation: b.dataset.v === 'true' }); load(); } catch (er) { toast(er.message, 'error'); } }));
+  };
+  await load();
+}
+
+async function system(body, s) {
+  const sy = s.system;
+  body.innerHTML = html`<div class="card" style="max-width:760px"><div class="card-head"><h2>System configuration</h2></div><form id="sysForm" class="form-grid">
+    <label class="field"><span>Rotation interval (days)</span><input type="number" name="rotation_interval_days" min="1" max="30" value="${sy.rotation_interval_days}"></label>
+    <label class="field"><span>Max rotations per list</span><input type="number" name="list_max_rotations" min="1" max="10" value="${sy.list_max_rotations}"></label>
+    <label class="field"><span>Contacts per list (max 50)</span><input type="number" name="list_size" min="1" max="50" value="${sy.list_size}"></label>
+    <label class="field"><span>Generation batch size (contacts per Claude request)</span><input type="number" name="generation_batch_size" min="1" max="15" value="${sy.generation_batch_size}"></label>
+    <label class="field"><span>Default meeting duration (minutes)</span><input type="number" name="default_meeting_duration_minutes" min="15" max="480" value="${sy.default_meeting_duration_minutes}"></label>
+    <label class="field"><span>Timezone</span><input type="text" name="timezone" value="${sy.timezone}"></label>
+    <label class="field span-2"><span>Target cities (comma separated; generation rotates through them)</span><textarea name="target_cities">${(sy.target_cities || []).join(', ')}</textarea></label>
+    <div class="col span-2"><label class="check"><input type="checkbox" name="rotation_enabled" ${sy.rotation_enabled ? 'checked' : ''}> Automatic rotation enabled</label><label class="check"><input type="checkbox" name="auto_generate_after_rotation" ${sy.auto_generate_after_rotation ? 'checked' : ''}> Generate new lists automatically after rotation</label></div>
+    <div class="span-2"><button class="btn primary" type="submit">Save system configuration</button></div></form></div>`;
+  body.querySelector('#sysForm').addEventListener('submit', async (e) => { e.preventDefault(); const v = formValues(e.target); v.target_cities = v.target_cities.split(',').map((x) => x.trim()).filter(Boolean); try { await api.patch('/api/settings/system', v); toast('System configuration saved', 'success'); } catch (er) { toast(er.message, 'error'); } });
+}
+
+async function status(body) {
+  const d = await api.get('/api/settings/system/status');
+  body.innerHTML = html`<div class="grid grid-2"><div class="card"><div class="card-head"><h2>Database status</h2>${raw(badge(d.database.ok ? 'connected' : 'unreachable', d.database.ok ? 'success' : 'danger'))}</div>
+      ${d.database.ok ? html`<dl class="kv"><dt>Database</dt><dd>${d.database.database}</dd><dt>Server</dt><dd>${d.database.version}</dd><dt>Latency</dt><dd>${d.database.latencyMs} ms</dd><dt>Latest migration</dt><dd>${d.counts.latest_migration}</dd><dt>Users / contacts / lists</dt><dd>${d.counts.users} / ${d.counts.contacts} / ${d.counts.lists}</dd><dt>Calls / meetings / follow-ups</dt><dd>${d.counts.calls} / ${d.counts.meetings} / ${d.counts.follow_ups}</dd><dt>Activity log entries</dt><dd>${d.counts.activity}</dd></dl>` : raw('<div class="error-box">The database could not be reached.</div>')}
+    </div>
+    <div class="card"><div class="card-head"><h2>Environment</h2></div><dl class="kv"><dt>Runtime</dt><dd>Node ${d.environment.node}${d.environment.vercel ? ` · Vercel (${d.environment.region || 'region n/a'})` : ' · local server'}</dd><dt>Claude model</dt><dd>${d.environment.claude_model}</dd><dt>Claude web search</dt><dd>${d.environment.claude_web_search ? 'on' : 'off'}</dd><dt>Server API key</dt><dd>${d.environment.server_key_configured ? 'configured' : raw('<span class="badge warning">missing</span>')}</dd><dt>Encryption key</dt><dd>${d.environment.encryption_configured ? 'configured' : raw('<span class="badge warning">missing</span>')}</dd><dt>Cron secret</dt><dd>${d.environment.cron_secret_configured ? 'configured' : raw('<span class="badge warning">missing — scheduled rotation will be rejected</span>')}</dd><dt>Business-data provider</dt><dd>${d.environment.search_provider.provider} (${d.environment.search_provider.enabled ? 'enabled' : 'not enabled'})</dd><dt>Cycle</dt><dd>${d.cycle.started ? `#${d.cycle.current_cycle_number}, next rotation ${fmtDateTime(d.cycle.next_rotation_at)}` : 'not started'}</dd></dl></div></div>
+    <div class="card mt-3"><div class="card-head"><h2>Generation status (recent jobs)</h2></div>${d.generation_jobs.length ? html`<div class="table-wrap"><table><thead><tr><th>List</th><th>Owner</th><th>Status</th><th>Saved / Requested</th><th>Duplicates</th><th>Rejected</th><th>Needs verification</th><th>Attempts</th><th>Last batch</th><th>Error</th></tr></thead><tbody>${join(d.generation_jobs, (j) => html`<tr><td><b>${j.list_code}</b> ${raw(badge(j.contact_type, j.contact_type))}</td><td>${j.owner_name}</td><td>${raw(badge(j.status, j.status === 'completed' ? 'success' : j.status === 'failed' ? 'danger' : j.status === 'exhausted' ? 'warning' : 'info'))}</td><td>${j.saved_count} / ${j.requested_count}</td><td>${j.duplicate_count}</td><td>${j.rejected_count}</td><td>${j.needs_verification_count}</td><td>${j.attempts}</td><td>${fmtDateTime(j.last_batch_at)}</td><td class="small muted">${j.last_error || ''}</td></tr>`)}</tbody></table></div>` : raw(emptyState('⚙', 'No generation jobs yet'))}</div>`;
+}
+
+async function audit(body) {
+  const f = { action: '', user_id: '', from: '', to: '' }; let page = 0; const limit = 50;
+  const ACTIONS = ['login', 'logout', 'login_failed', 'lead_generated', 'lead_rejected_duplicate', 'generation_batch', 'generation_failed', 'generation_exhausted', 'call_recorded', 'contact_skipped', 'follow_up_created', 'follow_up_updated', 'follow_up_rescheduled', 'meeting_created', 'meeting_updated', 'meeting_cancelled', 'list_created', 'list_rotated', 'list_completed', 'ownership_transferred', 'rotation_completed', 'rotation_failed', 'api_key_updated', 'api_key_removed', 'settings_changed', 'password_changed', 'user_updated', 'niche_created', 'niche_updated', 'research_generated', 'notes_updated'];
+  body.innerHTML = html`<div class="card"><div class="card-head"><h2>Audit / activity log</h2><div class="flex flex-wrap"><select id="aAct" style="width:200px"><option value="">All actions</option>${join(ACTIONS, (a) => html`<option value="${a}">${a}</option>`)}</select><select id="aUser" style="width:150px"><option value="">All users</option>${join(state.users, (u) => html`<option value="${u.id}">${u.display_name}</option>`)}</select><input type="date" id="aFrom" style="width:150px"><input type="date" id="aTo" style="width:150px"><button class="btn sm" id="aGo">Filter</button></div></div><div id="aTbl"></div></div>`;
+  const load = async () => {
+    const r = await api.get('/api/admin/activity' + api.qs({ ...f, limit, offset: page * limit }));
+    const pages = Math.max(1, Math.ceil(r.total / limit));
+    body.querySelector('#aTbl').innerHTML = (r.items.length ? html`<div class="table-wrap"><table><thead><tr><th>When</th><th>User</th><th>Action</th><th>Contact</th><th>List</th><th>Details</th></tr></thead><tbody>${join(r.items, (a) => html`<tr><td class="nowrap">${fmtDateTime(a.timestamp)}</td><td>${a.user_name || 'System'}</td><td>${raw(badge(a.action.replace(/_/g, ' '), a.action.includes('fail') ? 'danger' : 'neutral'))}</td><td>${a.business_name ? raw(`<a href="#/contact/${a.contact_id}">${esc(a.business_name)}</a>`) : '—'}</td><td class="small">${a.list_name || '—'}</td><td class="small muted" style="max-width:380px">${JSON.stringify(a.details || {}).slice(0, 220)}</td></tr>`)}</tbody></table></div>` : emptyState('📝', 'No matching events').s) + `<div class="flex-between mt-2 small muted"><span>${r.total} events</span><div class="flex"><button class="btn xs" id="aPrev" ${page === 0 ? 'disabled' : ''}>Prev</button><span>${page + 1}/${pages}</span><button class="btn xs" id="aNext" ${page + 1 >= pages ? 'disabled' : ''}>Next</button></div></div>`;
+    body.querySelector('#aPrev').addEventListener('click', () => { page--; load(); });
+    body.querySelector('#aNext').addEventListener('click', () => { page++; load(); });
+  };
+  body.querySelector('#aGo').addEventListener('click', () => { f.action = body.querySelector('#aAct').value; f.user_id = body.querySelector('#aUser').value; f.from = body.querySelector('#aFrom').value; f.to = body.querySelector('#aTo').value; page = 0; load(); });
+  await load();
+}
