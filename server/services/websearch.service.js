@@ -68,11 +68,19 @@ function parseJinaMarkdown(md, decodeLink) {
   return out;
 }
 
-/** Drops results that share no word with the query (a proxied engine sometimes serves an unrelated cached page). */
+/**
+ * Drops results unrelated to the query: a proxied engine sometimes serves an unrelated cached page
+ * (e.g. VPN downloads for a "social media management Karachi" query). A result must share at least two
+ * query words (one for very short queries), and when most of a page fails that test the whole page is
+ * discarded so the next source is tried.
+ */
 function relevantOnly(results, query) {
-  const tokens = String(query).toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 4);
+  const tokens = [...new Set(String(query).toLowerCase().replace(/\bor\b/g, ' ').split(/[^a-z0-9]+/).filter((t) => t.length >= 4))];
   if (!tokens.length) return results;
-  return results.filter((r) => { const hay = `${r.title} ${r.snippet} ${r.url}`.toLowerCase(); return tokens.some((t) => hay.includes(t)); });
+  const need = tokens.length >= 3 ? 2 : 1;
+  const kept = results.filter((r) => { const hay = `${r.title} ${r.snippet} ${r.url}`.toLowerCase(); return tokens.filter((t) => hay.includes(t)).length >= need; });
+  if (results.length >= 5 && kept.length < results.length * 0.3) return [];
+  return kept;
 }
 
 const JINA_READER = 'https://r.jina.ai/';
