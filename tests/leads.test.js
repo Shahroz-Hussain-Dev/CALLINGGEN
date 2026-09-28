@@ -214,3 +214,21 @@ test('lists export as a PDF for their owner and the business owner; the owner ca
   const { rows: logs } = await h.db.query("SELECT details FROM activity_logs WHERE action = 'contact_deleted'");
   assert.equal(logs.length, 1); assert.match(logs[0].details.business_name, /PdfBiz/);
 });
+
+test('the owner can create a list for an employee, and continuing a completed list keeps its niches', async () => {
+  const { shahroz, amman } = await h.loginAll();
+  const ids = await nicheIds(shahroz.cookie, 'service', 2);
+  h.fake.queueLeads([h.makeLead({ niche: 'Travel Agencies' })]);
+  const r = await h.request('POST', '/api/leads/generate', { cookie: shahroz.cookie, body: { contact_type: 'service', niche_ids: ids, count: 1, for_user_id: amman.user.id } });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.list.original_owner_id, amman.user.id);
+  assert.equal(r.body.list.current_owner_id, amman.user.id);
+  assert.equal(r.body.job.status, 'completed');
+  const forbidden = await h.request('POST', '/api/leads/generate', { cookie: amman.cookie, body: { contact_type: 'service', niche_ids: ids, count: 1, for_user_id: shahroz.user.id } });
+  assert.equal(forbidden.status, 403);
+  h.fake.queueLeads([h.makeLead({ niche: 'Travel Agencies' })]);
+  const more = await h.request('POST', `/api/lists/${r.body.list.id}/generate`, { cookie: shahroz.cookie, body: { count: 2 } });
+  assert.equal(more.status, 200, more.text);
+  assert.deepEqual(more.body.list.selected_niches.map((n) => n.id).sort(), ids.sort(), 'niches preserved when the completed list is extended');
+  assert.equal(more.body.list.target_size, 2);
+});

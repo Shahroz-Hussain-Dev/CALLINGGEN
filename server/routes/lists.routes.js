@@ -32,7 +32,8 @@ router.post('/lists/:id/generate', async (req, res) => {
   const { rows } = await db.query('SELECT id, status FROM generation_jobs WHERE list_id = $1 ORDER BY created_at DESC LIMIT 1', [list.id]);
   let jobId = rows[0] ? rows[0].id : null;
   if (!jobId || ['completed', 'cancelled'].includes(rows[0].status)) {
-    const r = await lists.createOrContinue(req.user, { contact_type: list.contact_type, niche_ids: [], count: (req.body || {}).count || list.target_size }, { forUserId: list.original_owner_id });
+    // keep the list's own niches when a completed job is continued (an empty selection would fall back to the user's defaults)
+    const r = await lists.createOrContinue(req.user, { contact_type: list.contact_type, niche_ids: (Array.isArray(list.selected_niches) ? list.selected_niches : []).map((n) => n.id).filter(Boolean), count: (req.body || {}).count || list.target_size }, { forUserId: list.original_owner_id });
     jobId = r.job_id;
     if (!jobId) throw new ConflictError('This list already has its full number of contacts');
   }

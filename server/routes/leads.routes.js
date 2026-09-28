@@ -20,7 +20,8 @@ router.get('/leads/filters', async (req, res) => res.json(await contacts.filterO
 // Generate: creates/continues this cycle's list for the panel and runs the first batch.
 router.post('/leads/generate', async (req, res) => {
   const body = req.body || {};
-  const { list, job_id, created } = await lists.createOrContinue(req.user, body);
+  // for_user_id: the owner may create or extend another user's list for the current cycle
+  const { list, job_id, created } = await lists.createOrContinue(req.user, body, body.for_user_id ? { forUserId: String(body.for_user_id) } : {});
   let batch = null;
   if (body.run_first_batch !== false && job_id) batch = await generation.runBatch(req.user, job_id);
   res.json({ list: await lists.getById(list.id), job: batch ? batch.job : null, batch: batch ? batch.batch : null, created });
