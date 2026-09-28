@@ -103,8 +103,17 @@ function openingEvidenceFor(lead, ev, maxAgeDays, now = new Date()) {
     if (!best || best.dated_within === false || (cand.dated_within && !best.dated_within) || (!best.recent_page && cand.recent_page)) best = cand;
     if (best.dated_within) break;
   }
+  if (best && best.dated_within !== false) return best;
+  // No announcement: a brand-new social account (a handful of posts, a small following) is itself evidence of a
+  // business that started weeks ago, not years ago.
+  const a = audienceFor(lead, ev);
+  if (a && a.instagram_posts !== null && a.instagram_followers !== null && a.instagram_posts <= NEW_ACCOUNT_MAX_POSTS && a.instagram_followers <= NEW_ACCOUNT_MAX_FOLLOWERS) {
+    return { quote: `${a.instagram_posts} posts, ${a.instagram_followers.toLocaleString('en-US')} followers (new account)`, source_url: a.source_url, opened_on: null, dated_within: null, recent_page: false, kind: 'new_account' };
+  }
   return best;
 }
+const NEW_ACCOUNT_MAX_POSTS = 20;
+const NEW_ACCOUNT_MAX_FOLLOWERS = 500;
 
 const DESK_RE = /reception|appointment|front ?desk|helpline|booking|clinic (?:number|no|line)|landline|office (?:number|no)|ptcl|uan|for appointments?/i;
 /**

@@ -66,6 +66,12 @@ test('opening evidence is extracted from the sources with absolute and relative 
   const old = evidence.openingEvidenceFor({ business_name: 'Old Smile Dental' }, ev, 30, now);
   assert.equal(old.dated_within, false, 'a dated announcement from years ago fails the window');
   assert.equal(evidence.openingEvidenceFor({ business_name: 'Nowhere Clinic' }, ev, 30, now), null);
+  const fresh = { results: [{ title: 'Glow Lab (@glowlab.khi) - Instagram', snippet: '184 Followers, 90 Following, 9 Posts - Glow Lab Karachi. Skin clinic, DHA. Bookings 0300-1234567', url: 'https://www.instagram.com/glowlab.khi/' }], pages: [] };
+  const acc = evidence.openingEvidenceFor({ business_name: 'Glow Lab', social_profiles: { instagram: 'https://instagram.com/glowlab.khi' } }, fresh, 30, now);
+  assert.ok(acc && acc.kind === 'new_account', 'a brand-new account counts as opening evidence: ' + JSON.stringify(acc));
+  assert.deepEqual(criteria.check({ business_name: 'Glow Lab' }, criteria.normalize({ max_age_days: 30 }), { opening: acc }), { ok: true, match: 'likely' });
+  const established = { results: [{ title: 'Big Salon (@bigsalon) - Instagram', snippet: '45K Followers, 120 Following, 2,300 Posts - Big Salon Karachi', url: 'https://www.instagram.com/bigsalon/' }], pages: [] };
+  assert.equal(evidence.openingEvidenceFor({ business_name: 'Big Salon', social_profiles: { instagram: 'https://instagram.com/bigsalon' } }, established, 30, now), null);
   // verifyLead: model quote must be in the evidence; the server extraction wins; criteria applied
   const corpus = 'noor dental care (@noordental) instagram we are now open! grand opening 12 september 2026 at dha phase 6. book on 0321-1234567 https://www.instagram.com/noordental/';
   const full = { corpus, phones: new Set(['923211234567']), urls: new Set(['https://www.instagram.com/noordental/']), results: ev.results, pages: [] };
