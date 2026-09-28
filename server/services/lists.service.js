@@ -8,6 +8,7 @@ const niches = require('./niches.service');
 const cycle = require('./cycle.service');
 const users = require('./users.service');
 const { TERMINAL_STATUSES } = require('./contacts.service');
+const criteria = require('../lib/criteria');
 
 function assertAccess(user, list) {
   if (!list) throw new NotFoundError('List not found');
@@ -90,11 +91,14 @@ async function makeListCode(client, contactType, cycleNumber, owner) {
  * ensures a generation job exists for the requested number of contacts.
  * Idempotent: one list per original owner / panel / cycle.
  */
-async function createOrContinue(user, { contact_type, niche_ids, count }, { forUserId = null, client: existing = null, source = 'manual' } = {}) {
+async function createOrContinue(user, { contact_type, niche_ids, count, criteria: criteriaInput }, { forUserId = null, client: existing = null, source = 'manual' } = {}) {
   const type = v.oneOf(contact_type, ['strategy', 'service'], { field: 'contact_type', required: true });
   const targetUserId = forUserId || user.id;
   if (targetUserId !== user.id && user.role !== 'owner') throw new ForbiddenError();
   const all = await settings.getAll();
+  // Targeting criteria: the owner may set them per list; everyone else gets the global default, snapshotted at creation.
+  let listCriteria = null;
+  if (criteriaInput !== undefined && criteriaInput !== null) { if (user.role !== 'owner') throw new ForbiddenError('Only the owner can set targeting criteria'); listCriteria = criteria.normalize(criteriaInput); }
   const maxSize = Number(all.list_size) || 50;
   const requested = v.int(count, { field: 'count', min: 1, max: 50, fallback: maxSize });
   const target = Math.min(requested, 50);
@@ -121,17 +125,17 @@ async function createOrContinue(user, { contact_type, niche_ids, count }, { forU
     if (existingRows[0]) {
       listId = existingRows[0].id;
       await client.query(
-        `UPDATE contact_lists SET target_size = GREATEST(target_size, $2), selected_niches = $3, list_status = CASE WHEN list_status = 'completed' THEN 'active' ELSE list_status END WHERE id = $1`,
-        [listId, target, JSON.stringify(nicheRows.map((n) => ({ id: n.id, name: n.name, category: n.category })))],
+        `UPDATE contact_lists SET target_size = GREATEST(target_size, $2), selected_niches = $3, criteria = COALESCE($4::jsonb, criteria), list_status = CASE WHEN list_status = 'completed' THEN 'active' ELSE list_status END WHERE id = $1`,
+        [listId, target, JSON.stringify(nicheRows.map((n) => ({ id: n.id, name: n.name, category: n.category }))), listCriteria ? JSON.stringify(listCriteria) : null],
       );
     } else {
       const code = await makeListCode(client, type, state.current_cycle_number, owner);
       const name = `${type === 'strategy' ? 'Strategy' : 'Service Sales'} List ${code} · ${owner.display_name} · Cycle ${state.current_cycle_number}`;
       const { rows } = await client.query(
-        `INSERT INTO contact_lists (list_name, list_code, contact_type, current_owner_id, original_owner_id, rotation_date, cycle_number, list_status, selected_niches, target_size, generation_progress)
-         VALUES ($1, $2, $3, $4, $4, $5, $6, 'generating', $7, $8, $9) RETURNING id`,
+        `INSERT INTO contact_lists (list_name, list_code, contact_type, current_owner_id, original_owner_id, rotation_date, cycle_number, list_status, selected_niches, target_size, generation_progress, criteria)
+         VALUES ($1, $2, $3, $4, $4, $5, $6, 'generating', $7, $8, $9, $10) RETURNING id`,
         [name, code, type, targetUserId, state.next_rotation_at, state.current_cycle_number, JSON.stringify(nicheRows.map((n) => ({ id: n.id, name: n.name, category: n.category }))), target,
-          JSON.stringify({ target, saved: 0, duplicates: 0, rejected: 0, needs_verification: 0, status: 'pending' })],
+          JSON.stringify({ target, saved: 0, duplicates: 0, rejected: 0, needs_verification: 0, status: 'pending' }), JSON.stringify(listCriteria || criteria.normalize(all.lead_criteria))],
       );
       listId = rows[0].id;
       created = true;

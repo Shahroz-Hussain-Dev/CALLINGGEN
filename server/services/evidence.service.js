@@ -9,6 +9,7 @@ const config = require('../config');
 const logger = require('../logger');
 const websearch = require('./websearch.service');
 const norm = require('../lib/normalize');
+const criteriaLib = require('../lib/criteria');
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 let fetchImpl = (...a) => fetch(...a);
@@ -20,12 +21,44 @@ const PHONE_RE = /(?:\+?92[\s\-.]?\d{2,3}[\s\-.]?\d{3,4}[\s\-.]?\d{3,4}|(?<!\d)0
 const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
 const SOCIAL_RE = /https?:\/\/(?:www\.)?(?:instagram\.com|facebook\.com|fb\.com|tiktok\.com|linkedin\.com\/(?:company|in)|wa\.me|api\.whatsapp\.com)\/[^\s"'<>)]+/gi;
 
-function buildQueries({ panel, niche, city }) {
+function buildQueries({ panel, niche, city, criteria = null }) {
   const base = `${niche} ${city}`;
   const qs = panel === 'strategy'
     ? [`${base}`, `${base} instagram`, `${base} facebook`, `${base} whatsapp booking`, `${niche} in ${city} contact number`, `best ${niche} ${city} appointment`]
     : [`${base}`, `${base} contact number`, `${base} facebook`, `${base} linkedin`, `${niche} in ${city} office`, `top ${niche} ${city}`];
-  return qs.map((q) => q.replace(/\s+/g, ' ').trim());
+  const c = criteria && typeof criteria === 'object' ? criteria : null;
+  if (c && (c.stage === 'startup' || c.founded_from_year)) {
+    const year = c.founded_from_year || new Date().getFullYear();
+    qs.push(`new ${niche} ${city} ${year}`, `${niche} ${city} "newly opened" OR "grand opening" OR "now open" OR "just launched"`);
+    // established names dominate the generic queries: swap the "best" / "top" query for a newcomer-oriented one
+    qs.splice(5, 1, `${niche} ${city} "opening soon" OR "new" instagram`);
+  }
+  if (c && c.leadership === 'female_preferred') qs.push(`${niche} ${city} "female" OR "woman" OR "her" owner`);
+  return [...new Set(qs.map((q) => q.replace(/\s+/g, ' ').trim()))];
+}
+
+const AUDIENCE_RE = /([\d.,]+\s?[KkMm]?)\s*Followers?,\s*([\d.,]+\s?[KkMm]?)\s*Following,\s*([\d.,]+\s?[KkMm]?)\s*Posts?/i;
+function parseCount(s) {
+  const m = /([\d.,]+)\s?([KkMm])?/.exec(String(s || ''));
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(/,/g, ''));
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * (m[2] ? (m[2].toLowerCase() === 'k' ? 1000 : 1000000) : 1));
+}
+/** Instagram follower / post counts for a business, taken from search snippets that name it or its handle. */
+function audienceFor(lead, ev) {
+  const handle = lead.social_profiles && lead.social_profiles.instagram ? (norm.classifyUrl(lead.social_profiles.instagram).handle || '').toLowerCase() : '';
+  const n = norm.normalizeBusinessName(lead.business_name || '');
+  for (const r of ev.results || []) {
+    const text = `${r.title} ${r.snippet}`;
+    const m = AUDIENCE_RE.exec(text);
+    if (!m) continue;
+    const low = text.toLowerCase();
+    if ((handle && (low.includes(`@${handle}`) || String(r.url).toLowerCase().includes(`instagram.com/${handle}`))) || (n && norm.normalizeBusinessName(text).includes(n))) {
+      return { instagram_followers: parseCount(m[1]), instagram_posts: parseCount(m[3]), source_url: r.url };
+    }
+  }
+  return null;
 }
 
 function extractFacts(text) {
@@ -90,20 +123,20 @@ const GATHER_CACHE_MS = 10 * 60 * 1000;
 function clearCacheForTests() { gatherCache.clear(); }
 
 /** Gathers evidence for one niche/city. Returns { queries, results, pages, corpus, phones, urls, elapsed_ms }. */
-async function gather({ panel, niche, city, timeBudgetMs = config.evidence.timeBudgetMs, maxPages = config.evidence.maxPages }) {
-  const cacheKey = `${panel}|${niche}|${city}`;
+async function gather({ panel, niche, city, criteria = null, timeBudgetMs = config.evidence.timeBudgetMs, maxPages = config.evidence.maxPages }) {
+  const cacheKey = `${panel}|${niche}|${city}|${JSON.stringify(criteria || {})}`;
   const hit = gatherCache.get(cacheKey);
   if (hit && Date.now() - hit.at < GATHER_CACHE_MS) return { ...hit.ev, cached: true };
-  const ev = await gatherUncached({ panel, niche, city, timeBudgetMs, maxPages });
+  const ev = await gatherUncached({ panel, niche, city, criteria, timeBudgetMs, maxPages });
   if (ev.results.length) gatherCache.set(cacheKey, { at: Date.now(), ev });
   return ev;
 }
-async function gatherUncached({ panel, niche, city, timeBudgetMs, maxPages }) {
+async function gatherUncached({ panel, niche, city, criteria, timeBudgetMs, maxPages }) {
   const started = Date.now();
-  const queries = buildQueries({ panel, niche, city });
+  const queries = buildQueries({ panel, niche, city, criteria });
   const seen = new Map(); // url -> result
   for (const q of queries) {
-    if (Date.now() - started > timeBudgetMs * 0.5) break;
+    if (Date.now() - started > timeBudgetMs * 0.65) break;
     const results = await websearch.search(q, { count: 10 });
     for (const r of results) {
       let host; try { host = new URL(r.url).hostname.replace(/^www\./, ''); } catch (_) { continue; }
@@ -193,11 +226,29 @@ function nameInCorpus(name, corpus) {
  * Enforces that every hard fact in a lead exists in the evidence. Returns
  * { ok, lead, reason, changes[] }. Unsupported values are nulled and marked unknown.
  */
-function verifyLead(rawLead, ev) {
+function verifyLead(rawLead, ev, criteria = null) {
   const lead = JSON.parse(JSON.stringify(rawLead || {}));
   const changes = [];
   const corpus = ev.corpus || '';
   if (!lead.business_name || !nameInCorpus(lead.business_name, corpus)) return { ok: false, reason: 'not_in_evidence', lead, changes };
+  // Targeting facts: quotes must exist in the evidence, a founding year must appear in it, audience counts come from snippets.
+  const squash = (t) => String(t || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const squashedCorpus = squash(corpus);
+  const signals = (Array.isArray(lead.startup_signals) ? lead.startup_signals : []).map((q) => String(q || '').trim()).filter((q) => q.length >= 8 && squashedCorpus.includes(squash(q).replace(/^["'“”]+|["'“”]+$/g, '')));
+  if (Array.isArray(lead.startup_signals) && signals.length !== lead.startup_signals.length) changes.push(`${lead.startup_signals.length - signals.length} startup signal(s) removed (not in evidence)`);
+  lead.startup_signals = signals.slice(0, 5);
+  if (lead.founded_year !== null && lead.founded_year !== undefined) {
+    const y = String(lead.founded_year);
+    if (!/^\d{4}$/.test(y) || !corpus.includes(y)) { changes.push(`founded_year removed (not in evidence): ${y}`); lead.founded_year = null; }
+  }
+  if (lead.team_size_estimate !== null && lead.team_size_estimate !== undefined && !Number.isFinite(Number(lead.team_size_estimate))) lead.team_size_estimate = null;
+  if (typeof lead.female_led !== 'boolean') lead.female_led = null;
+  lead.audience = audienceFor(lead, ev);
+  if (criteriaLib.isActive(criteria)) {
+    const chk = criteriaLib.check(lead, criteria, { followers: lead.audience ? lead.audience.instagram_followers : null });
+    if (!chk.ok) return { ok: false, reason: chk.reason, lead, changes };
+    lead.criteria_match = chk.match;
+  }
   const fv = Object.assign({ business_name: 'unknown', phone: 'unknown', website: 'unknown', address: 'unknown', social_profiles: 'unknown', people: 'unknown' }, lead.field_verification || {});
   fv.business_name = 'verified';
   const digitsCorpus = corpus.replace(/[^\d]/g, '');
@@ -275,4 +326,4 @@ async function gatherForBusiness({ name, city, timeBudgetMs = config.evidence.ti
   return { queries, results, pages, corpus, phones, urls, elapsed_ms: Date.now() - started };
 }
 
-module.exports = { gather, gatherForBusiness, render, verifyLead, buildQueries, extractFacts, htmlToText, fetchPage, fetchPageViaJina, findPhoneFor, setFetchForTests, clearCacheForTests, nameInCorpus };
+module.exports = { gather, gatherForBusiness, render, verifyLead, buildQueries, extractFacts, htmlToText, fetchPage, fetchPageViaJina, findPhoneFor, audienceFor, setFetchForTests, clearCacheForTests, nameInCorpus };

@@ -32,6 +32,7 @@ router.post('/leads/:id/call', async (req, res) => res.status(201).json(await ca
 router.post('/leads/:id/follow-up', async (req, res) => res.status(201).json(await followups.create(req.user, req.params.id, req.body || {})));
 router.post('/leads/:id/skip', async (req, res) => res.status(201).json({ record: await contacts.skip(req.user, req.params.id, (req.body || {}).reason) }));
 router.patch('/leads/:id/notes', async (req, res) => res.json({ contact: await contacts.updateNotes(req.user, req.params.id, (req.body || {}).notes) }));
+router.delete('/leads/:id', async (req, res) => res.json(await contacts.remove(req.user, req.params.id)));
 
 // Claude-powered research: meeting preparation / automation analysis (service) or booking analysis (strategy)
 router.post('/leads/:id/research', async (req, res) => {

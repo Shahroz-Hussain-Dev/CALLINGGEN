@@ -18,6 +18,7 @@ const ai = require('./ai.service');
 const duplicates = require('./duplicates.service');
 const search = require('./search');
 const listsService = require('./lists.service');
+const criteriaLib = require('../lib/criteria');
 
 const LOCK_TTL_MS = 2 * 60 * 1000;
 
@@ -37,7 +38,7 @@ function jobView(job) {
 }
 
 /** Normalizes and validates a raw candidate from Claude. Returns {ok, contact, reason}. */
-function prepareCandidate(raw, { panel, nicheRows, city }) {
+function prepareCandidate(raw, { panel, nicheRows, city, criteria = null }) {
   if (!raw || typeof raw !== 'object') return { ok: false, reason: 'invalid_candidate' };
   const businessName = String(raw.business_name || '').trim();
   if (businessName.length < 2) return { ok: false, reason: 'missing_business_name' };
@@ -82,6 +83,18 @@ function prepareCandidate(raw, { panel, nicheRows, city }) {
   const people = (arr) => (Array.isArray(arr) ? arr.filter((p) => p && p.name).map((p) => ({ name: String(p.name).trim(), designation: p.designation ? String(p.designation) : null, source_url: p.source_url || null, contact: p.contact || null })) : []);
   const strs = (arr) => (Array.isArray(arr) ? arr.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()) : []);
   const fv = raw.field_verification && typeof raw.field_verification === 'object' ? raw.field_verification : {};
+  const intOrNull = (x) => (x === null || x === undefined || x === '' || !Number.isFinite(Number(x)) ? null : Math.round(Number(x)));
+  const targeting = {
+    founded_year: intOrNull(raw.founded_year), team_size_estimate: intOrNull(raw.team_size_estimate),
+    female_led: typeof raw.female_led === 'boolean' ? raw.female_led : null,
+    startup_signals: strs(raw.startup_signals).slice(0, 5), audience: raw.audience && typeof raw.audience === 'object' ? raw.audience : null,
+    criteria_match: raw.criteria_match || null,
+  };
+  if (criteriaLib.isActive(criteria)) {
+    const chk = criteriaLib.check({ ...raw, ...targeting }, criteria, { followers: targeting.audience ? targeting.audience.instagram_followers : null });
+    if (!chk.ok) return { ok: false, reason: chk.reason };
+    targeting.criteria_match = targeting.criteria_match || chk.match;
+  }
 
   const contact = {
     business_name: businessName,
@@ -101,15 +114,15 @@ function prepareCandidate(raw, { panel, nicheRows, city }) {
     country: 'Pakistan',
     social_profiles: social,
     company_size: raw.company_size && raw.company_size !== 'unknown' ? raw.company_size : null,
-    employee_count_estimate: raw.employee_count_estimate ? String(raw.employee_count_estimate).slice(0, 60) : null,
+    employee_count_estimate: raw.employee_count_estimate ? String(raw.employee_count_estimate).slice(0, 60) : (targeting.team_size_estimate ? String(targeting.team_size_estimate) : null),
     business_locations: strs(raw.business_locations),
     departments: strs(raw.departments),
     management_data: { owners: people(raw.owners), senior_management: people(raw.management) },
     decision_makers: people(raw.decision_makers),
     contact_type: panel,
     business_operations: panel === 'strategy'
-      ? { services: strs(raw.services), current_booking_method: raw.current_booking_method || null, online_booking_status: raw.online_booking_status || 'unknown', website_status: raw.website_status || 'unknown', booking_problems: raw.booking_problems || null, website_opportunity: raw.website_opportunity || null, booking_automation_opportunity: raw.booking_automation_opportunity || null, social_presence: Object.keys(social).filter((k) => !k.endsWith('_handle')) }
-      : { services: strs(raw.services), existing_software: strs(raw.existing_software), operational_challenges: strs(raw.operational_challenges), repetitive_processes: strs(raw.repetitive_processes), relevant_latechs_services: strs(raw.relevant_latechs_services) },
+      ? { services: strs(raw.services), current_booking_method: raw.current_booking_method || null, online_booking_status: raw.online_booking_status || 'unknown', website_status: raw.website_status || 'unknown', booking_problems: raw.booking_problems || null, website_opportunity: raw.website_opportunity || null, booking_automation_opportunity: raw.booking_automation_opportunity || null, social_presence: Object.keys(social).filter((k) => !k.endsWith('_handle')), ...targeting }
+      : { services: strs(raw.services), existing_software: strs(raw.existing_software), operational_challenges: strs(raw.operational_challenges), repetitive_processes: strs(raw.repetitive_processes), relevant_latechs_services: strs(raw.relevant_latechs_services), ...targeting },
     automation_opportunities: Array.isArray(raw.automation_opportunities) ? raw.automation_opportunities.filter((o) => o && o.process).map((o) => ({ process: String(o.process), opportunity: String(o.opportunity || ''), latechs_service: String(o.latechs_service || '') })) : [],
     field_verification: { business_name: fv.business_name || 'unknown', phone: fv.phone || 'unknown', website: fv.website || 'unknown', address: fv.address || 'unknown', social_profiles: fv.social_profiles || 'unknown', people: fv.people || 'unknown' },
     source_urls: strs(raw.source_urls).slice(0, 25),
@@ -181,6 +194,7 @@ async function runBatch(user, jobId, { forceUnlock = false, timeBudgetMs } = {})
   const { niche, city } = pickCityAndNiche(job, list, all.target_cities || []);
   const nicheRows = Array.isArray(list.selected_niches) ? list.selected_niches : [];
   const nicheNames = niche ? [niche.name] : nicheRows.map((n) => n.name);
+  const criteria = criteriaLib.normalize(list.criteria && Object.keys(list.criteria).length ? list.criteria : all.lead_criteria);
 
   // Exclusions: businesses already known in this niche/city + rejected candidates for this job
   const { rows: known } = await db.query(
@@ -190,10 +204,10 @@ async function runBatch(user, jobId, { forceUnlock = false, timeBudgetMs } = {})
   const { rows: rejected } = await db.query('SELECT business_name FROM generation_rejections WHERE job_id = $1 ORDER BY created_at DESC LIMIT 60', [id]);
   const excludeNames = [...new Set([...known.map((r) => r.business_name), ...rejected.map((r) => r.business_name)])];
 
-  const summary = { requested: count, received: 0, saved: 0, duplicates: 0, rejected: 0, needs_verification: 0, verified: 0, niche: nicheNames.join(', '), city, web_search_used: false, search_notes: '', model: null, provider: ai.activeName(), errors: [] };
+  const summary = { requested: count, received: 0, saved: 0, duplicates: 0, rejected: 0, needs_verification: 0, verified: 0, niche: nicheNames.join(', '), city, web_search_used: false, search_notes: '', model: null, provider: ai.activeName(), errors: [], criteria: criteriaLib.isActive(criteria) ? criteriaLib.describe(criteria) : null };
   let generated;
   try {
-    generated = await ai.generateLeadCandidates({ userId: user.role === 'owner' && job.current_owner_id !== user.id ? job.current_owner_id : user.id, panel: job.contact_type, niches: nicheNames, city, count, excludeNames, ...(timeBudgetMs ? { timeBudgetMs } : {}) });
+    generated = await ai.generateLeadCandidates({ userId: user.role === 'owner' && job.current_owner_id !== user.id ? job.current_owner_id : user.id, panel: job.contact_type, niches: nicheNames, city, count, excludeNames, criteria, ...(timeBudgetMs ? { timeBudgetMs } : {}) });
   } catch (err) {
     const mapped = ai.mapError(err);
     logger.warn('Lead generation batch failed', { jobId: id, code: mapped.code, message: mapped.message });
@@ -218,7 +232,7 @@ async function runBatch(user, jobId, { forceUnlock = false, timeBudgetMs } = {})
 
   for (const raw of generated.leads) {
     if (summary.saved >= count) break;
-    const prepared = prepareCandidate(raw, { panel: job.contact_type, nicheRows, city });
+    const prepared = prepareCandidate(raw, { panel: job.contact_type, nicheRows, city, criteria });
     if (!prepared.ok) {
       summary.rejected++;
       await db.query('INSERT INTO generation_rejections (job_id, list_id, business_name, normalized_name, reason, details) VALUES ($1, $2, $3, $4, $5, $6)', [id, job.list_id, String((raw && raw.business_name) || 'unknown').slice(0, 200), null, prepared.reason, JSON.stringify({ city })]);

@@ -37,6 +37,7 @@ app.use('/api', require('./routes/niches.routes'));
 app.use('/api', require('./routes/settings.routes'));
 app.use('/api', require('./routes/admin.routes'));
 app.use('/api', require('./routes/dashboard.routes'));
+app.use('/api', require('./routes/export.routes'));
 app.use('/api', notFound);
 
 // Static frontend (served by Vercel's CDN in production; by Express locally / in tests)

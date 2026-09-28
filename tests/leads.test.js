@@ -156,3 +156,61 @@ test('per-user API keys are stored encrypted and only the last four characters a
   assert.equal(rows[0].encrypted_key.includes('abcdefghij'), false);
   assert.equal((await h.request('POST', '/api/claude/key', { cookie: fizza.cookie, body: { api_key: 'not-a-key' } })).status, 400);
 });
+
+test('owner targeting criteria reach the research prompt, are snapshotted on the list and enforced on candidates', async () => {
+  const { shahroz, fizza } = await h.loginAll();
+  const set = await h.request('PATCH', '/api/settings/system', { cookie: shahroz.cookie, body: { lead_criteria: { stage: 'startup', founded_from_year: 2026, max_employees: 10, leadership: 'female_preferred' }, target_cities: ['Karachi', 'Islamabad'] } });
+  assert.equal(set.status, 200, set.text);
+  const denied = await h.request('PATCH', '/api/settings/system', { cookie: fizza.cookie, body: { lead_criteria: { stage: 'any' } } });
+  assert.equal(denied.status, 403);
+  h.fake.queueLeads([
+    h.makeLead({ city: 'Karachi', company_size: 'solo', founded_year: 2026, team_size_estimate: 3, female_led: true, startup_signals: ['newly opened studio'] }),
+    h.makeLead({ city: 'Karachi', company_size: 'large', founded_year: 2012, team_size_estimate: 40, female_led: false, startup_signals: [] }),
+  ]);
+  const r = await h.request('POST', '/api/leads/generate', { cookie: fizza.cookie, body: { contact_type: 'strategy', niche_ids: await nicheIds(fizza.cookie, 'strategy', 1), count: 2 } });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.list.criteria.stage, 'startup');
+  assert.equal(r.body.list.criteria.founded_from_year, 2026);
+  assert.equal(r.body.batch.saved, 1, JSON.stringify(r.body.batch));
+  assert.equal(r.body.batch.rejected, 1, 'the established business is rejected by the criteria');
+  assert.match(r.body.batch.criteria, /started in 2026 or later/);
+  const userText = h.fake.calls[0].messages[0].content;
+  const text = typeof userText === 'string' ? userText : JSON.stringify(userText);
+  assert.match(text, /TARGETING/); assert.match(text, /female-led/i); assert.match(text, /Karachi/);
+  const { rows } = await h.db.query('SELECT business_operations, employee_count_estimate FROM contacts');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].business_operations.female_led, true);
+  assert.equal(rows[0].business_operations.founded_year, 2026);
+  assert.deepEqual(rows[0].business_operations.startup_signals, ['newly opened studio']);
+  assert.equal(rows[0].business_operations.criteria_match, 'confirmed');
+  const { rows: rej } = await h.db.query('SELECT reason FROM generation_rejections');
+  assert.ok(rej.some((x) => x.reason === 'fails_criteria_founded_before'), JSON.stringify(rej));
+});
+
+test('lists export as a PDF for their owner and the business owner; the owner can delete never-called contacts', async () => {
+  const { amman, fizza, shahroz } = await h.loginAll();
+  const a = await h.createListWithContacts(amman.user, 'strategy', 3, 'PdfBiz');
+  const b = await h.createListWithContacts(amman.user, 'service', 2, 'PdfSvc');
+  const pdf = await fetch(`${h.baseUrl()}/api/export/lists.pdf?ids=${a.listId},${b.listId}&title=Lead%20list%201`, { headers: { Cookie: shahroz.cookie } });
+  assert.equal(pdf.status, 200);
+  assert.equal(pdf.headers.get('content-type'), 'application/pdf');
+  const buf = Buffer.from(await pdf.arrayBuffer());
+  assert.equal(buf.subarray(0, 4).toString(), '%PDF');
+  assert.ok(buf.length > 2000, 'PDF has content');
+  const own = await fetch(`${h.baseUrl()}/api/export/lists.pdf?ids=${a.listId}`, { headers: { Cookie: amman.cookie } });
+  assert.equal(own.status, 200);
+  const other = await fetch(`${h.baseUrl()}/api/export/lists.pdf?ids=${a.listId}`, { headers: { Cookie: fizza.cookie } });
+  assert.equal(other.status, 403, 'an employee cannot export another employee\'s list');
+  // deletion: owner only, never-called only
+  const emp = await h.request('DELETE', `/api/leads/${a.contactIds[0]}`, { cookie: amman.cookie });
+  assert.equal(emp.status, 403);
+  const del = await h.request('DELETE', `/api/leads/${a.contactIds[0]}`, { cookie: shahroz.cookie });
+  assert.equal(del.status, 200, del.text);
+  await h.db.query('UPDATE contacts SET call_count = 1 WHERE id = $1', [a.contactIds[1]]);
+  const called = await h.request('DELETE', `/api/leads/${a.contactIds[1]}`, { cookie: shahroz.cookie });
+  assert.equal(called.status, 409);
+  const { rows } = await h.db.query('SELECT count(*) AS n FROM contacts');
+  assert.equal(Number(rows[0].n), 4);
+  const { rows: logs } = await h.db.query("SELECT details FROM activity_logs WHERE action = 'contact_deleted'");
+  assert.equal(logs.length, 1); assert.match(logs[0].details.business_name, /PdfBiz/);
+});

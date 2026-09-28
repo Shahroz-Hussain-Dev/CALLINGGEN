@@ -17,6 +17,7 @@ const { SUBMIT_LEADS_TOOL } = require('../prompts/leadSchema');
 const prompts = require('../prompts/leadGeneration');
 const analysis = require('../prompts/analysis');
 const evidence = require('./evidence.service');
+const criteriaLib = require('../lib/criteria');
 
 let fetchImpl = (...args) => fetch(...args);
 function setFetchForTests(fn) { fetchImpl = fn || ((...args) => fetch(...args)); }
@@ -355,11 +356,11 @@ function useEvidenceMode(webSearch) {
 }
 
 /** Lead generation from server-gathered evidence: one JSON call per batch. */
-async function generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage }) {
+async function generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage, criteria = null }) {
   const niche = niches[0];
-  const ev = await evidence.gather({ panel, niche, city, timeBudgetMs: Math.max(15000, Math.min(config.evidence.timeBudgetMs, client.remainingMs() - 90000)) });
+  const ev = await evidence.gather({ panel, niche, city, criteria, timeBudgetMs: Math.max(15000, Math.min(config.evidence.timeBudgetMs, client.remainingMs() - 90000)) });
   const rendered = evidence.render(ev);
-  const userText = `${prompts.buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled: true }).replace(/Return the leads by calling submit_leads once\./, '').replace(/Web search is available: use it to find and confirm each business before including it\./, 'Use ONLY the evidence below.')}
+  const userText = `${prompts.buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled: true, criteria }).replace(/Return the leads by calling submit_leads once\./, '').replace(/Web search is available: use it to find and confirm each business before including it\./, 'Use ONLY the evidence below.')}
 
 ===== EVIDENCE =====
 ${rendered}
@@ -382,7 +383,7 @@ Return the JSON now (search_notes: say how many distinct qualifying businesses t
   const rejected = [];
   const notes = [];
   for (const raw of Array.isArray(data.leads) ? data.leads : []) {
-    const v = evidence.verifyLead(raw, ev);
+    const v = evidence.verifyLead(raw, ev, criteria);
     if (!v.ok) { rejected.push({ business_name: (raw && raw.business_name) || 'unknown', reason: v.reason }); continue; }
     if (v.changes.length) notes.push(`${v.lead.business_name}: ${v.changes.join('; ')}`);
     leads.push(v.lead);
@@ -403,11 +404,11 @@ Return the JSON now (search_notes: say how many distinct qualifying businesses t
     } catch (err) { logger.warn('Phone lookup failed', { name: lead.business_name, error: err.message }); }
   }
   usage.web_search_requests += lookups;
-  leads.sort((a, b) => (b.phone || b.whatsapp ? 1 : 0) - (a.phone || a.whatsapp ? 1 : 0));
+  leads.sort((a, b) => ((b.phone || b.whatsapp ? 4 : 0) + criteriaLib.rank(b, criteria)) - ((a.phone || a.whatsapp ? 4 : 0) + criteriaLib.rank(a, criteria)));
   return { leads, rejected, model, ev, notes, searchNotes: String(data.search_notes || '') };
 }
 
-async function generateLeadCandidates({ userId, panel, niches, city, count, excludeNames = [], webSearch = config.ai.gemini.webSearch, timeBudgetMs = config.ai.gemini.batchDeadlineMs }) {
+async function generateLeadCandidates({ userId, panel, niches, city, count, excludeNames = [], webSearch = config.ai.gemini.webSearch, timeBudgetMs = config.ai.gemini.batchDeadlineMs, criteria = null }) {
   const { client, source } = await getClientForUser(userId);
   client.setDeadline(timeBudgetMs);
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, web_search_requests: 0 };
@@ -416,13 +417,13 @@ async function generateLeadCandidates({ userId, panel, niches, city, count, excl
   try {
     // ---- Evidence mode (free): our own web searches + page reading, one model call ----
     if (useEvidenceMode(webSearch)) {
-      const r = await generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage });
+      const r = await generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage, criteria });
       for (const u of r.ev.urls) sources.add(u);
       const notes = [`${r.searchNotes}`.slice(0, 1200), `Evidence: ${r.ev.queries.length} searches, ${r.ev.results.length} results, ${r.ev.pages.length} pages read, ${r.ev.phones.size} phone numbers found.`, ...(r.notes.length ? ['Verification: ' + r.notes.join(' | ').slice(0, 800)] : [])];
       return { leads: r.leads, rejected: r.rejected, searchNotes: notes.filter(Boolean).join('\n'), sources: [...sources], usage, model: r.model, webSearchUsed: true, researchMode: 'evidence', warnings: [], keySource: source, report: evidence.render(r.ev, { maxChars: 6000 }) };
     }
     // ---- Native mode: Google Search grounding through the model ----
-    const researchPrompt = `${prompts.buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled: webSearch }).replace(/Return the leads by calling submit_leads once\./, '')}
+    const researchPrompt = `${prompts.buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled: webSearch, criteria }).replace(/Return the leads by calling submit_leads once\./, '')}
 
 OUTPUT FORMAT for this research step (plain text, not JSON): first a line "SEARCH NOTES:" with what you searched and how many real businesses you could confirm; then one section per business:
 ### <Business name>
@@ -445,7 +446,7 @@ Finish with "END OF REPORT".`;
     });
     if (warnings.includes('grounding_unavailable') && config.ai.gemini.researchMode === 'auto') {
       // Grounding was refused mid-way: redo this batch in evidence mode rather than trusting memory.
-      const r = await generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage });
+      const r = await generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage, criteria });
       for (const u of r.ev.urls) sources.add(u);
       const notes = [`${r.searchNotes}`.slice(0, 1200), `Evidence: ${r.ev.queries.length} searches, ${r.ev.results.length} results, ${r.ev.pages.length} pages read, ${r.ev.phones.size} phone numbers found.`, ...(r.notes.length ? ['Verification: ' + r.notes.join(' | ').slice(0, 800)] : [])];
       return { leads: r.leads, rejected: r.rejected, searchNotes: notes.filter(Boolean).join('\n'), sources: [...sources], usage, model: r.model, webSearchUsed: true, researchMode: 'evidence', warnings: [], keySource: source, report: evidence.render(r.ev, { maxChars: 6000 }) };

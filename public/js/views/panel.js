@@ -61,9 +61,9 @@ export async function renderPanel(root, type) {
         return html`<div class="list-card ${l.id === view.selectedListId ? 'selected' : ''}" data-list="${l.id}">
           <div class="flex-between"><div><b>${l.list_code}</b> ${l.is_current_cycle && l.original_owner_id === state.user.id ? raw(badge('Current cycle · yours', 'primary')) : l.original_owner_id !== state.user.id ? raw(badge(`Received from ${l.original_owner_name}`, 'info')) : raw(badge(`Cycle ${l.cycle_number}`, 'neutral'))} ${l.list_status === 'generating' ? raw(badge(`generating ${gp.saved || l.contact_count}/${gp.target || l.target_size}`, 'warning')) : raw('')}</div><span class="small muted">rotates ${l.rotation_date ? fmtDate(l.rotation_date, { day: '2-digit', month: 'short' }) : '—'}</span></div>
           <div class="progress-row mt-1"><span>${s.processed_this_cycle}/${s.total} processed</span>${raw(progressBar(s.processed_this_cycle, s.total || 1, type))}<span>${s.remaining} left</span></div>
-          <div class="small muted mt-1">${s.interested} interested · ${s.meetings_booked} meetings · ${s.follow_ups_pending} follow-ups · rotation ${l.rotation_count}× · original owner ${l.original_owner_name}</div>
+          <div class="small muted mt-1">${s.interested} interested · ${s.meetings_booked} meetings · ${s.follow_ups_pending} follow-ups · rotation ${l.rotation_count}× · original owner ${l.original_owner_name} · <a href="/api/export/lists.pdf?ids=${l.id}" target="_blank" rel="noopener" data-stop>Export PDF</a></div>
         </div>`; })}</div>` : raw(emptyState('📋', 'No list for this panel yet', 'Generate contacts to create your list for the current cycle.'))}`;
-    listsCard.querySelectorAll('[data-list]').forEach((c) => c.addEventListener('click', () => { view.selectedListId = c.dataset.list; view.page = 0; renderLists(); renderWorkflow(); renderContacts(); }));
+    listsCard.querySelectorAll('[data-list]').forEach((c) => c.addEventListener('click', (ev) => { if (ev.target.closest('[data-stop]')) return; view.selectedListId = c.dataset.list; view.page = 0; renderLists(); renderWorkflow(); renderContacts(); }));
   }
 
   // ---------------- generation ----------------
@@ -79,7 +79,15 @@ export async function renderPanel(root, type) {
     const jobStatus = job ? job.status : (currentList && currentList.generation_job ? currentList.generation_job.status : null);
     const j = job || (currentList ? currentList.generation_job : null);
     const canGenerate = view.claude && view.claude.active_source !== 'none';
+    const lc = (view.settings && view.settings.system && view.settings.system.lead_criteria) || {};
+    const critParts = [];
+    if (lc.stage === 'startup') critParts.push('startups only');
+    if (lc.founded_from_year) critParts.push(`started ${lc.founded_from_year}+`);
+    if (lc.max_employees) critParts.push(`≤ ${lc.max_employees} employees`);
+    if (lc.leadership === 'female_preferred') critParts.push('female-led preferred');
+    if (lc.notes) critParts.push(lc.notes);
     genCard.innerHTML = html`<div class="card-head"><h2>Generate contacts</h2>${currentList ? raw(`<span class="small muted">${have}/${target} in ${esc(currentList.list_code)}</span>`) : raw('<span class="small muted">creates this cycle\'s list</span>')}</div>
+      ${critParts.length ? html`<div class="small muted mb-2">Targeting: ${critParts.join(' · ')}${state.user.role === 'owner' ? raw(' · <a href="#/settings/system">change</a>') : raw('')}</div>` : raw('')}
       ${!generating ? html`<div class="small muted mb-2">Select one or more niches (saved preferences are pre-selected), choose how many contacts, then generate. ${view.claude ? view.claude.provider_label || 'The AI' : 'The AI'} researches real Pakistani businesses${view.claude && view.claude.web_search ? ` with ${view.claude.search_label || 'live web search'}` : ''}, every candidate is verified where possible, and duplicates across the whole database are rejected automatically.</div>
         <div style="max-height:260px;overflow:auto;padding-right:4px">${join(Object.entries(groups), ([g, items]) => html`${Object.keys(groups).length > 1 ? html`<h4 class="mt-2">${g}</h4>` : raw('')}<div class="chips mb-2">${join(items, (n) => html`<label class="chip ${type} ${saved.includes(n.id) ? 'on' : ''}"><input type="checkbox" name="niche" value="${n.id}" ${saved.includes(n.id) ? 'checked' : ''}>${n.name}</label>`)}</div>`)}</div>
         <div class="flex flex-wrap mt-2"><label class="field"><span>Number of contacts (max 50)</span><input type="number" name="count" min="1" max="50" value="${currentList ? target : 50}" style="width:120px"></label><div class="grow"></div>

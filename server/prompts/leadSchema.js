@@ -2,6 +2,8 @@
 /** JSON schema for the submit_leads tool (strict). Every property is required; use null when unknown. */
 
 const nullableString = { anyOf: [{ type: 'string' }, { type: 'null' }] };
+const nullableInteger = { anyOf: [{ type: 'integer' }, { type: 'null' }] };
+const nullableBoolean = { anyOf: [{ type: 'boolean' }, { type: 'null' }] };
 const stringArray = { type: 'array', items: { type: 'string' } };
 const VERIFICATION = ['verified', 'estimated', 'unknown'];
 
@@ -40,6 +42,10 @@ const leadProperties = {
   services: stringArray,
   company_size: { type: 'string', enum: ['solo', 'small', 'medium', 'large', 'unknown'] },
   employee_count_estimate: { ...nullableString, description: 'e.g. "5-10" if there is evidence; null otherwise.' },
+  founded_year: { ...nullableInteger, description: 'Year the business started, ONLY when a source states or clearly implies it; null otherwise.' },
+  team_size_estimate: { ...nullableInteger, description: 'Estimated number of people working in the business when the evidence gives a signal; null otherwise.' },
+  female_led: { ...nullableBoolean, description: 'true when the owner/founder/lead is a woman according to the evidence, false when a man, null when unknown.' },
+  startup_signals: { ...stringArray, description: 'Short quotes copied verbatim from the sources showing the business is new, small or female-led. Empty when none.' },
   business_locations: stringArray,
   departments: { ...stringArray, description: 'Departments only if evident from sources (e.g. sales team, support team); otherwise empty.' },
   owners: { type: 'array', items: personSchema() },

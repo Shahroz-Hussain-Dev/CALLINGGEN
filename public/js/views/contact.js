@@ -43,13 +43,15 @@ export async function renderContactDetail(root, id) {
     <div class="flex-between mb-3"><div><a class="small" href="#/${type}">← ${type === 'strategy' ? 'Strategy Leads' : 'Service Sales Leads'}</a>
       <h1 class="mt-1">${c.business_name} ${c.is_demo ? raw(badge('DEMO DATA', 'warning')) : raw('')}</h1>
       <div class="flex flex-wrap">${raw(panelBadge(type))}${raw(statusBadge(c.contact_status))}${raw(interestBadge(c.interest_level))}${raw(dataStatusBadge(c.data_status))}${raw(websiteBadge(c.website_available))}${c.meeting_status !== 'none' ? raw(badge(`Meeting ${c.meeting_status}`, c.meeting_status === 'booked' ? 'primary' : 'neutral')) : raw('')}${data.processed_this_cycle ? raw(badge('Processed this cycle', 'success')) : raw(badge('Not yet processed this cycle', 'neutral'))}</div></div>
-      <div id="actions">${raw(contactActionsHtml(c))}</div></div>
+      <div id="actions">${raw(contactActionsHtml(c))}${state.user.role === 'owner' && !Number(c.call_count) ? raw('<button class="btn xs danger mt-1" id="deleteContact" title="Owner only: removes a never-called contact">Delete contact</button>') : raw('')}</div></div>
     <div class="grid grid-2">
       <div class="col">
         <div class="card"><div class="card-head"><h2>1 · Business information</h2></div><dl class="kv">
           <dt>Business name</dt><dd>${c.business_name} ${raw(verified('business_name'))}</dd><dt>Industry</dt><dd>${c.industry || '—'}</dd><dt>Niche</dt><dd>${c.niche || '—'}</dd>
           <dt>Description</dt><dd>${c.business_description || '—'}</dd><dt>Website</dt><dd>${c.website ? raw(`<a href="${esc(c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a>`) : (c.website_available === false ? 'No official website' : 'Unknown')} ${raw(verified('website'))}</dd>
-          <dt>Services</dt><dd>${listToText(ops.services)}</dd><dt>Business size</dt><dd>${c.company_size || '—'}${c.employee_count_estimate ? ` · ~${c.employee_count_estimate} employees` : ''}</dd>
+          <dt>Services</dt><dd>${listToText(ops.services)}</dd><dt>Business size</dt><dd>${c.company_size || '—'}${c.employee_count_estimate ? ` · ~${c.employee_count_estimate} employees` : ''}${ops.audience && ops.audience.instagram_followers != null ? ` · ${Number(ops.audience.instagram_followers).toLocaleString('en-US')} Instagram followers` : ''}</dd>
+          <dt>Started</dt><dd>${ops.founded_year || raw('<span class="faint">not published</span>')}</dd><dt>Leadership</dt><dd>${ops.female_led === true ? 'Female-led' : ops.female_led === false ? 'Male-led' : raw('<span class="faint">unknown</span>')}${ops.criteria_match ? raw(` <span class="badge ${ops.criteria_match === 'confirmed' ? 'success' : 'neutral'}">targeting ${esc(ops.criteria_match)}</span>`) : raw('')}</dd>
+          ${Array.isArray(ops.startup_signals) && ops.startup_signals.length ? html`<dt>Startup signals</dt><dd>${raw(renderValue(ops.startup_signals))}</dd>` : raw('')}
           <dt>Locations</dt><dd>${listToText(c.business_locations)}</dd></dl></div>
         <div class="card"><div class="card-head"><h2>2 · Contact information</h2></div><dl class="kv">
           <dt>Phone</dt><dd>${c.phone ? raw(`<a href="${telHref(c.phone)}"><b>${esc(c.phone)}</b></a> · <a href="${waHref(c.phone)}" target="_blank" rel="noopener">WhatsApp</a>`) : '—'} ${raw(verified('phone'))}</dd>
@@ -105,6 +107,8 @@ export async function renderContactDetail(root, id) {
     </div>`;
 
   bindContactActions(root, c, reload);
+  const del = root.querySelector('#deleteContact');
+  if (del) del.addEventListener('click', async () => { if (!(await confirmDialog({ title: 'Delete contact', message: `Delete "${c.business_name}" permanently? Only contacts without call history can be deleted. This is recorded in the audit log.`, confirmText: 'Delete', danger: true }))) return; try { await api.del(`/api/leads/${c.id}`); toast('Contact deleted', 'success'); location.hash = `#/${type}`; } catch (er) { toast(er.message, 'error'); } });
   root.querySelector('#saveNotes').addEventListener('click', async (e) => { setBusy(e.target, true, 'Saving…'); try { await api.patch(`/api/leads/${c.id}/notes`, { notes: root.querySelector('#notes').value }); toast('Notes saved', 'success'); } catch (er) { toast(er.message, 'error'); } setBusy(e.target, false); });
   root.querySelectorAll('[data-fu]').forEach((b) => b.addEventListener('click', async () => { try { await api.patch(`/api/follow-ups/${b.dataset.fu}`, { status: b.dataset.s }); toast('Follow-up updated', 'success'); reload(); } catch (er) { toast(er.message, 'error'); } }));
   root.querySelectorAll('[data-m]').forEach((tr) => tr.addEventListener('click', () => { const m = data.meetings.find((x) => x.id === tr.dataset.m); if (m) meetingDetailsModal({ ...m, can_manage: state.user.role === 'owner' || m.meeting_owner_id === state.user.id, created_by_name: m.created_by_name || '' }, reload); }));

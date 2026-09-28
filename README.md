@@ -219,3 +219,9 @@ and meetings (creation, overlap prevention incl. concurrent bookings, shared vis
 * `npm run rotation:run` – run the rotation/generation scheduler once from any machine or cron.
 * `npm run db:status` – connectivity and migration check; `npm run db:probe` – finds a reachable Supabase endpoint.
 * Settings → *Database & generation status* (owner) shows DB health, environment flags and jobs.
+
+
+## Lead targeting, PDF export and clean-up
+* **Targeting (Settings → System configuration → Lead targeting):** business stage (startups only), started-in year, maximum employees, female-led preference, follower cap and a free note. The rules are written into every research prompt and enforced server-side: a founding year is kept only when it appears in the sources, quotes proving a business is new / small / female-led are kept as *startup signals*, Instagram follower counts are read from search snippets, and candidates that a source shows to be older, larger or established are rejected. Each list snapshots the criteria it was generated with.
+* **PDF export:** every list card has *Export PDF*; `GET /api/export/lists.pdf?ids=a,b` combines several lists into one document (owner, or the current owner of the lists).
+* **Clean-up:** the owner can delete a generated contact that has never been called (audited).

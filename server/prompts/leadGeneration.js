@@ -1,4 +1,5 @@
 'use strict';
+const criteria = require('../lib/criteria');
 /**
  * Prompts for Strategy Leads (Panel A) and Service Sales Leads (Panel B).
  * The system prompts are static so they can be prompt-cached; per-request
@@ -70,15 +71,16 @@ Leave strategy-panel fields (current_booking_method, booking_problems, website_o
 RESEARCH METHOD when web search is available: run several searches per niche and city (e.g. "<niche> <city>", "<niche> <city> LinkedIn", "<niche> in <city> contact", "<niche> <city> careers" to gauge team size), open company pages and LinkedIn/Facebook profiles, confirm contact details, and look for named decision-makers on the company's own pages or LinkedIn.
 ${COMMON_RULES}`;
 
-function buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled }) {
+function buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled, criteria: crit = null }) {
   const nicheText = niches.length === 1 ? `Niche: ${niches[0]}` : `Niches (any of these qualify): ${niches.join('; ')}`;
+  const targeting = criteria.promptText(crit);
   const exclusion = excludeNames.length
     ? `EXCLUDED (already in our database - do not return these or the same business under another name):\n${excludeNames.map((n) => '- ' + n).join('\n')}`
     : 'EXCLUDED: none yet.';
   return `Find up to ${count} real, currently operating businesses for the ${panel === 'strategy' ? 'STRATEGY LEADS' : 'SERVICE SALES LEADS'} panel.
 ${nicheText}
 City: ${city}, Pakistan (nearby areas of the same city are fine).
-${searchEnabled ? 'Web search is available: use it to find and confirm each business before including it.' : 'Web search is NOT available in this run: include only businesses you are highly confident exist, set every unseen field to null, and set confidence to "needs_verification".'}
+${targeting ? targeting + '\n' : ''}${searchEnabled ? 'Web search is available: use it to find and confirm each business before including it.' : 'Web search is NOT available in this run: include only businesses you are highly confident exist, set every unseen field to null, and set confidence to "needs_verification".'}
 
 ${exclusion}
 

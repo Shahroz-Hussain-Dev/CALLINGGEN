@@ -146,11 +146,11 @@ function tryParseLeadsJson(text) {
  * Asks Claude to research and submit lead candidates. Returns
  * { leads, searchNotes, sources, usage, model, webSearchUsed }.
  */
-async function generateLeadCandidates({ userId, panel, niches, city, count, excludeNames = [], webSearch = config.claude.webSearch }) {
+async function generateLeadCandidates({ userId, panel, niches, city, count, excludeNames = [], webSearch = config.claude.webSearch, criteria = null }) {
   const { client, source } = await getClientForUser(userId);
   const model = config.claude.model;
   const system = [{ type: 'text', text: panel === 'strategy' ? prompts.STRATEGY_SYSTEM : prompts.SERVICE_SYSTEM, cache_control: { type: 'ephemeral' } }];
-  const userPrompt = prompts.buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled: webSearch });
+  const userPrompt = prompts.buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled: webSearch, criteria });
   const buildTools = (strict) => {
     const tools = [];
     if (webSearch) tools.push(webSearchToolFor(model, city, config.claude.webSearchMaxUses));

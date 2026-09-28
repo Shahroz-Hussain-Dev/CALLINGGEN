@@ -82,6 +82,7 @@ async function resetDb() {
   await db.query("UPDATE system_settings SET value = 'true' WHERE key = 'auto_generate_after_rotation'");
   await db.query("UPDATE system_settings SET value = '50' WHERE key = 'list_size'");
   await db.query("UPDATE system_settings SET value = '5' WHERE key = 'generation_batch_size'");
+  await db.query("DELETE FROM system_settings WHERE key IN ('lead_criteria', 'target_cities')"); // back to defaults
   const ids = {};
   for (const u of USERS) {
     const { rows } = await db.query('INSERT INTO users (username, display_name, password_hash, role, rotation_order) VALUES ($1, $2, $3, $4, $5) RETURNING id', [u.username, u.display_name, hashPassword(u.password), u.role, u.rotation_order]);
@@ -153,4 +154,4 @@ async function createListWithContacts(user, type, n, prefix = 'Biz') {
   return { listId: list.id, contactIds: ids };
 }
 
-module.exports = { db, fake, setup, teardown, resetDb, request, login, loginAll, makeLead, insertContact, createListWithContacts, USERS, claude };
+module.exports = { db, fake, setup, teardown, resetDb, request, login, loginAll, makeLead, insertContact, createListWithContacts, USERS, claude, baseUrl: () => base };

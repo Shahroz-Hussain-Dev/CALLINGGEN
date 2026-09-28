@@ -93,3 +93,15 @@ Service `panel_fields`: `business_contacted, decision_maker_reached, decision_ma
 | GET | `/activity` | The user's own relevant activity. |
 | GET | `/users` | Names/roles for pickers. |
 | GET | `/health` | Public liveness + DB check. |
+
+
+## Lead targeting, export and clean-up
+
+| Method | Path | Who | Purpose |
+|---|---|---|---|
+| `PATCH` | `/api/settings/system` | owner | `lead_criteria` object: `stage` (`any` / `startup`), `founded_from_year`, `max_employees`, `leadership` (`any` / `female_preferred`), `max_followers`, `notes`. Written into every research prompt and enforced on every candidate; snapshotted on each list at creation (`contact_lists.criteria`). |
+| `POST` | `/api/leads/generate` | any | Accepts an optional `criteria` object (owner only) to override the global targeting for that list. |
+| `GET` | `/api/export/lists.pdf?ids=<id>,<id>&title=…` | owner, or the current owner of every listed list | PDF export of up to six lists in one document (landscape table: business, niche, city, phone / WhatsApp, social profile, owner, startup profile, data status, sources). `download=0` opens inline. |
+| `DELETE` | `/api/leads/:id` | owner | Deletes a generated contact that has never been called and has no follow-ups or meetings (409 otherwise). Audited as `contact_deleted`. |
+
+Saved contacts carry the targeting facts in `business_operations`: `founded_year`, `team_size_estimate`, `female_led`, `startup_signals` (quotes found in the sources), `audience` (Instagram follower and post counts read from search snippets) and `criteria_match` (`confirmed` / `unknown`). A candidate is rejected (`fails_criteria_founded_before`, `fails_criteria_team_size`, `fails_criteria_established`) when a source shows it started before the year, has more people than allowed, or is an established account.

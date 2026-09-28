@@ -1,6 +1,6 @@
 'use strict';
 const db = require('../db');
-const { NotFoundError, ForbiddenError, ValidationError } = require('../lib/errors');
+const { NotFoundError, ForbiddenError, ValidationError, ConflictError } = require('../lib/errors');
 const v = require('../lib/validate');
 const activity = require('./activity.service');
 const cycle = require('./cycle.service');
@@ -152,6 +152,22 @@ async function skip(user, id, reason) {
   return record;
 }
 
+/** Owner-only: removes a generated contact that has never been worked (no calls, follow-ups or meetings). */
+async function remove(user, id) {
+  if (user.role !== 'owner') throw new ForbiddenError('Only the owner can delete contacts');
+  const contact = await getById(v.uuid(id));
+  if (!contact) throw new NotFoundError('Contact not found');
+  const { rows } = await db.query('SELECT (SELECT count(*) FROM call_records WHERE contact_id = $1) AS calls, (SELECT count(*) FROM follow_ups WHERE contact_id = $1) AS follow_ups, (SELECT count(*) FROM meetings WHERE business_contact_id = $1) AS meetings', [contact.id]);
+  const used = rows[0];
+  if (Number(used.calls) || Number(used.follow_ups) || Number(used.meetings) || Number(contact.call_count)) throw new ConflictError('This contact has call history, follow-ups or meetings and cannot be deleted');
+  await db.withTransaction(async (client) => {
+    await activity.log('contact_deleted', { userId: user.id, listId: contact.contact_list_id, details: { business_name: contact.business_name, city: contact.city, niche: contact.niche, list_code: contact.list_code } }, client);
+    await client.query('DELETE FROM list_contacts WHERE contact_id = $1', [contact.id]);
+    await client.query('DELETE FROM contacts WHERE id = $1', [contact.id]);
+  });
+  return { deleted: true, id: contact.id };
+}
+
 async function updateNotes(user, id, notes) {
   const contact = await getForUser(user, id);
   const n = v.str(notes, { field: 'notes', max: 20000 });
@@ -193,4 +209,4 @@ async function filterOptions(user) {
   return { cities: cities.rows.map((r) => r.city), niches: niches.rows.map((r) => r.niche), cycles: cycles.rows.map((r) => r.cycle_number), statuses: CALL_STATUSES, interest_levels: INTEREST_LEVELS };
 }
 
-module.exports = { TERMINAL_STATUSES, CALL_STATUSES, INTEREST_LEVELS, assertAccess, getById, getForUser, getDetail, list, nextInList, skip, updateNotes, saveResearch, adminSearch, filterOptions, CONTACT_SELECT, CONTACT_FROM };
+module.exports = { TERMINAL_STATUSES, CALL_STATUSES, INTEREST_LEVELS, assertAccess, getById, getForUser, getDetail, list, nextInList, skip, remove, updateNotes, saveResearch, adminSearch, filterOptions, CONTACT_SELECT, CONTACT_FROM };
