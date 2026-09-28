@@ -67,3 +67,15 @@ test('verifyLead keeps only evidenced startup facts and applies the criteria', (
   const big = evidence.verifyLead({ ...lead, founded_year: null, team_size_estimate: 40 }, ev, STARTUP);
   assert.equal(big.ok, false); assert.equal(big.reason, 'fails_criteria_team_size');
 });
+
+test('a founding year must be stated in the sources; landline area codes locate the business', () => {
+  const norm = require('../server/lib/normalize');
+  assert.equal(norm.cityFromPhone('041 5472772'), 'Faisalabad');
+  assert.equal(norm.cityFromPhone('+92 21 35360003'), 'Karachi');
+  assert.equal(norm.cityFromPhone('0300-1234567'), null, 'mobile numbers carry no city');
+  const mk = (corpus) => ({ corpus, phones: new Set(['923001234567']), urls: new Set(['https://www.instagram.com/x/']), results: [], pages: [] });
+  const lead = { business_name: 'Aura Studio', phone: '0300-1234567', social_profiles: {}, founded_year: 2026 };
+  assert.equal(evidence.verifyLead(lead, mk('aura studio bridal campaign 2026 call 0300-1234567')).lead.founded_year, null, 'a campaign year is not a founding year');
+  assert.equal(evidence.verifyLead(lead, mk('aura studio est. 2026 call 0300-1234567')).lead.founded_year, 2026);
+  assert.equal(evidence.verifyLead(lead, mk('aura studio opened its doors in 2026 call 0300-1234567')).lead.founded_year, 2026);
+});

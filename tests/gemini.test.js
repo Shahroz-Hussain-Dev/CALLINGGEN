@@ -179,7 +179,7 @@ test('evidence mode: one JSON call grounded in server-gathered evidence, with se
   const origGather = evidence.gather;
   const config = require('../server/config');
   const origMode = config.ai.gemini.researchMode; config.ai.gemini.researchMode = 'evidence';
-  evidence.gather = async () => ({ queries: ['q1', 'q2'], results: [{ title: 'Glow Studio Lahore', snippet: 'WhatsApp 0300-1234567', url: 'https://instagram.com/glowstudio.pk', host: 'instagram.com' }], pages: [], corpus: 'glow studio lahore whatsapp 0300-1234567 https://instagram.com/glowstudio.pk', phones: new Set(['923001234567']), urls: new Set(['https://instagram.com/glowstudio.pk']), elapsed_ms: 5 });
+  evidence.gather = async () => ({ queries: ['q1', 'q2'], results: [{ title: 'Glow Studio Lahore', snippet: 'WhatsApp 0300-1234567', url: 'https://instagram.com/glowstudio.pk', host: 'instagram.com' }], pages: [], corpus: 'glow studio lahore whatsapp 0300-1234567 https://instagram.com/glowstudio.pk glow studio annex new branch opening soon', phones: new Set(['923001234567']), urls: new Set(['https://instagram.com/glowstudio.pk']), elapsed_ms: 5 });
   const calls = fakeFetch(async ({ body }) => {
     assert.equal(body.tools, undefined, 'no native grounding tools in evidence mode');
     assert.match(body.contents[0].parts[0].text, /===== EVIDENCE =====/);
@@ -187,10 +187,11 @@ test('evidence mode: one JSON call grounded in server-gathered evidence, with se
     return { json: textResponse(JSON.stringify({ search_notes: 'two candidates', leads: [
       { business_name: 'Glow Studio', city: 'Lahore', phone: '0300-9999999', social_profiles: { instagram: 'https://instagram.com/glowstudio.pk' }, source_urls: ['https://instagram.com/glowstudio.pk'] },
       { business_name: 'Imaginary Salon', city: 'Lahore', phone: '0300-0000000', social_profiles: {}, source_urls: [] },
+      { business_name: 'Glow Studio Annex', city: 'Lahore', phone: '0300-7777777', social_profiles: {}, source_urls: [] },
     ] })) };
   });
   const origFind = evidence.findPhoneFor; const lookups = [];
-  evidence.findPhoneFor = async ({ name, city }) => { lookups.push(`${name}|${city}`); return { phone: '0300-1234567', normalized: '923001234567', source_url: 'https://instagram.com/glowstudio.pk', snippet: 'WhatsApp 0300-1234567' }; };
+  evidence.findPhoneFor = async ({ name, city }) => { lookups.push(`${name}|${city}`); return name === 'Glow Studio' ? { phone: '0300-1234567', normalized: '923001234567', source_url: 'https://instagram.com/glowstudio.pk', snippet: 'WhatsApp 0300-1234567' } : null; };
   try {
     const r = await gemini.generateLeadCandidates({ userId: 'u', panel: 'strategy', niches: ['Bridal Makeup Studios'], city: 'Lahore', count: 5, webSearch: true });
     assert.equal(calls.length, 1, 'a single model call per batch');
@@ -198,12 +199,12 @@ test('evidence mode: one JSON call grounded in server-gathered evidence, with se
     assert.equal(r.webSearchUsed, true);
     assert.equal(r.leads.length, 1);
     assert.equal(r.leads[0].business_name, 'Glow Studio');
-    assert.deepEqual(lookups, ['Glow Studio|Lahore'], 'the invented phone was stripped, then one follow-up lookup ran');
+    assert.deepEqual(lookups, ['Glow Studio|Lahore', 'Glow Studio Annex|Lahore'], 'stripped phones trigger follow-up lookups; a channel-less business in the evidence is retried, not dropped outright');
     assert.equal(r.leads[0].phone, '0300-1234567');
     assert.equal(r.leads[0].field_verification.phone, 'verified');
     assert.equal(r.leads[0].confidence, 'verified');
-    assert.deepEqual(r.rejected, [{ business_name: 'Imaginary Salon', reason: 'not_in_evidence' }]);
-    assert.equal(r.usage.web_search_requests, 3, "two evidence searches + one phone lookup");
+    assert.deepEqual(r.rejected, [{ business_name: 'Imaginary Salon', reason: 'not_in_evidence' }, { business_name: 'Glow Studio Annex', reason: 'no_public_contact_channel' }]);
+    assert.equal(r.usage.web_search_requests, 4, 'two evidence searches + two phone lookups');
   } finally { apiKeys.resolveKeyForUser = origResolve; gemini.setFetchForTests(null); evidence.gather = origGather; evidence.findPhoneFor = origFind; config.ai.gemini.researchMode = origMode; }
 });
 

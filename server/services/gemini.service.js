@@ -382,26 +382,38 @@ Return the JSON now (search_notes: say how many distinct qualifying businesses t
   const leads = [];
   const rejected = [];
   const notes = [];
+  const recoverable = []; // real businesses from the evidence whose contact channel was not in it: a follow-up search may find the number
   for (const raw of Array.isArray(data.leads) ? data.leads : []) {
     const v = evidence.verifyLead(raw, ev, criteria);
-    if (!v.ok) { rejected.push({ business_name: (raw && raw.business_name) || 'unknown', reason: v.reason }); continue; }
+    if (!v.ok) { if (v.reason === 'no_public_contact_channel') recoverable.push(v); else rejected.push({ business_name: (raw && raw.business_name) || 'unknown', reason: v.reason }); continue; }
     if (v.changes.length) notes.push(`${v.lead.business_name}: ${v.changes.join('; ')}`);
     leads.push(v.lead);
   }
-  // Follow-up lookups: a lead that is verified but has no number gets one targeted search for its phone.
+  // Follow-up lookups: one targeted search per lead without a number (verified leads first, then the recoverable ones).
   let lookups = 0;
-  for (const lead of leads) {
-    if (lead.phone || lead.whatsapp || lookups >= config.evidence.phoneLookups || client.remainingMs() < 40000) continue;
+  const attachPhone = (lead, found) => {
+    lead.phone = found.phone;
+    lead.field_verification = { ...(lead.field_verification || {}), phone: 'verified' };
+    if (found.source_url && !(lead.source_urls || []).includes(found.source_url)) lead.source_urls = [...(lead.source_urls || []), found.source_url];
+    lead.confidence = 'verified';
+    notes.push(`${lead.business_name}: phone ${found.phone} found by follow-up search (${found.source_url})`);
+  };
+  const lookup = async (lead) => {
     lookups++;
-    try {
-      const found = await evidence.findPhoneFor({ name: lead.business_name, city: lead.city || city });
-      if (!found) continue;
-      lead.phone = found.phone;
-      lead.field_verification = { ...(lead.field_verification || {}), phone: 'verified' };
-      if (found.source_url && !(lead.source_urls || []).includes(found.source_url)) lead.source_urls = [...(lead.source_urls || []), found.source_url];
-      lead.confidence = 'verified';
-      notes.push(`${lead.business_name}: phone ${found.phone} found by follow-up search (${found.source_url})`);
-    } catch (err) { logger.warn('Phone lookup failed', { name: lead.business_name, error: err.message }); }
+    try { return await evidence.findPhoneFor({ name: lead.business_name, city: lead.city || city }); } catch (err) { logger.warn('Phone lookup failed', { name: lead.business_name, error: err.message }); return null; }
+  };
+  const canLookup = () => lookups < config.evidence.phoneLookups && client.remainingMs() > 40000;
+  for (const lead of leads) {
+    if (lead.phone || lead.whatsapp || !canLookup()) continue;
+    const found = await lookup(lead);
+    if (found) attachPhone(lead, found);
+  }
+  for (const v of recoverable) {
+    const found = canLookup() ? await lookup(v.lead) : null;
+    if (!found) { rejected.push({ business_name: v.lead.business_name || 'unknown', reason: 'no_public_contact_channel' }); continue; }
+    attachPhone(v.lead, found);
+    if (v.changes.length) notes.push(`${v.lead.business_name}: ${v.changes.join('; ')}`);
+    leads.push(v.lead);
   }
   usage.web_search_requests += lookups;
   leads.sort((a, b) => ((b.phone || b.whatsapp ? 4 : 0) + criteriaLib.rank(b, criteria)) - ((a.phone || a.whatsapp ? 4 : 0) + criteriaLib.rank(a, criteria)));

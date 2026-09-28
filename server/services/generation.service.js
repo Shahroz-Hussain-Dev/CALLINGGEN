@@ -79,7 +79,10 @@ function prepareCandidate(raw, { panel, nicheRows, city, criteria = null }) {
 
   const nicheName = String(raw.niche || '').trim();
   const nicheMatch = nicheRows.find((n) => n.name.toLowerCase() === nicheName.toLowerCase()) || nicheRows.find((n) => nicheName && (n.name.toLowerCase().includes(nicheName.toLowerCase()) || nicheName.toLowerCase().includes(n.name.toLowerCase()))) || nicheRows[0];
-  const cityName = norm.normalizeCity(raw.city) || norm.normalizeCity(city);
+  let cityName = norm.normalizeCity(raw.city) || norm.normalizeCity(city);
+  let cityCorrectedFrom = null;
+  const landlineCity = norm.cityFromPhone(phone) || norm.cityFromPhone(whatsapp);
+  if (landlineCity && cityName && landlineCity.toLowerCase() !== cityName.toLowerCase() && !(landlineCity === 'Islamabad' && cityName === 'Rawalpindi')) { cityCorrectedFrom = cityName; cityName = landlineCity; }
   const people = (arr) => (Array.isArray(arr) ? arr.filter((p) => p && p.name).map((p) => ({ name: String(p.name).trim(), designation: p.designation ? String(p.designation) : null, source_url: p.source_url || null, contact: p.contact || null })) : []);
   const strs = (arr) => (Array.isArray(arr) ? arr.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()) : []);
   const fv = raw.field_verification && typeof raw.field_verification === 'object' ? raw.field_verification : {};
@@ -89,6 +92,7 @@ function prepareCandidate(raw, { panel, nicheRows, city, criteria = null }) {
     female_led: typeof raw.female_led === 'boolean' ? raw.female_led : null,
     startup_signals: strs(raw.startup_signals).slice(0, 5), audience: raw.audience && typeof raw.audience === 'object' ? raw.audience : null,
     criteria_match: raw.criteria_match || null,
+    ...(cityCorrectedFrom ? { city_corrected_from: cityCorrectedFrom } : {}),
   };
   if (criteriaLib.isActive(criteria)) {
     const chk = criteriaLib.check({ ...raw, ...targeting }, criteria, { followers: targeting.audience ? targeting.audience.instagram_followers : null });
@@ -233,6 +237,7 @@ async function runBatch(user, jobId, { forceUnlock = false, timeBudgetMs } = {})
   for (const raw of generated.leads) {
     if (summary.saved >= count) break;
     const prepared = prepareCandidate(raw, { panel: job.contact_type, nicheRows, city, criteria });
+    if (prepared.ok && Array.isArray(all.target_cities) && all.target_cities.length && prepared.contact.city && !all.target_cities.some((tc) => String(tc).toLowerCase() === prepared.contact.city.toLowerCase())) { prepared.ok = false; prepared.reason = 'off_target_city'; }
     if (!prepared.ok) {
       summary.rejected++;
       await db.query('INSERT INTO generation_rejections (job_id, list_id, business_name, normalized_name, reason, details) VALUES ($1, $2, $3, $4, $5, $6)', [id, job.list_id, String((raw && raw.business_name) || 'unknown').slice(0, 200), null, prepared.reason, JSON.stringify({ city })]);

@@ -200,6 +200,16 @@ function normalizeCity(city) {
   return s ? s.replace(/\b\w/g, (c) => c.toUpperCase()) : null;
 }
 
+/** Pakistani landline area codes (after the country code) -> city. Mobile numbers (3xx) carry no city. */
+const AREA_CODES = { 21: 'Karachi', 42: 'Lahore', 51: 'Islamabad', 41: 'Faisalabad', 61: 'Multan', 91: 'Peshawar', 55: 'Gujranwala', 52: 'Sialkot', 22: 'Hyderabad', 62: 'Bahawalpur', 992: 'Abbottabad', 48: 'Sargodha', 44: 'Okara', 40: 'Sahiwal', 81: 'Quetta', 68: 'Rahim Yar Khan', 57: 'Attock', 53: 'Gujrat', 66: 'Muzaffargarh', 64: 'Dera Ghazi Khan', 71: 'Sukkur' };
+function cityFromPhone(phone) {
+  const n = normalizePhone(phone);
+  if (!n || !n.startsWith('92') || n.startsWith('923')) return null;
+  const rest = n.slice(2);
+  for (const len of [3, 2]) { const code = rest.slice(0, len); if (AREA_CODES[Number(code)] && rest.length >= len + 6) return AREA_CODES[Number(code)]; }
+  return null;
+}
+
 function normalizeEmail(email) {
   if (!email) return null;
   const s = String(email).trim().toLowerCase();
@@ -208,5 +218,5 @@ function normalizeEmail(email) {
 
 module.exports = {
   normalizeBusinessName, nameSimilarity, nameTokens, levenshtein, normalizePhone, formatPhoneForDisplay,
-  normalizeDomain, isSocialDomain, classifyUrl, normalizeHandle, normalizeCity, normalizeEmail, DEFAULT_CITIES,
+  normalizeDomain, isSocialDomain, classifyUrl, normalizeHandle, normalizeCity, normalizeEmail, cityFromPhone, DEFAULT_CITIES,
 };

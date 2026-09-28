@@ -238,8 +238,10 @@ function verifyLead(rawLead, ev, criteria = null) {
   if (Array.isArray(lead.startup_signals) && signals.length !== lead.startup_signals.length) changes.push(`${lead.startup_signals.length - signals.length} startup signal(s) removed (not in evidence)`);
   lead.startup_signals = signals.slice(0, 5);
   if (lead.founded_year !== null && lead.founded_year !== undefined) {
+    // a founding year must be stated as such in the sources ("est. 2026", "opened in 2026"), not merely appear somewhere
     const y = String(lead.founded_year);
-    if (!/^\d{4}$/.test(y) || !corpus.includes(y)) { changes.push(`founded_year removed (not in evidence): ${y}`); lead.founded_year = null; }
+    const stated = /^\d{4}$/.test(y) && new RegExp(`(est\\.?|estd\\.?|established|since|founded|opened|open(?:ed|ing) (?:its|our|the) doors|started|launched|new in|opening in|coming soon in|inaugurat\\w+)[^.\\n]{0,30}\\b${y}\\b|\\b${y}\\b[^.\\n]{0,12}(launch|grand opening|newly opened|inaugurat)`, 'i').test(corpus);
+    if (!stated) { changes.push(`founded_year removed (not stated in evidence): ${y}`); lead.founded_year = null; }
   }
   if (lead.team_size_estimate !== null && lead.team_size_estimate !== undefined && !Number.isFinite(Number(lead.team_size_estimate))) lead.team_size_estimate = null;
   if (typeof lead.female_led !== 'boolean') lead.female_led = null;
