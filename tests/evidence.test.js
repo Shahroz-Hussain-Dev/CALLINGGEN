@@ -91,8 +91,9 @@ test('parses search result pages rendered by Jina Reader (DuckDuckGo Lite and Bi
   const unrelated = [{ title: 'Shopify Community', url: 'https://community.shopify.com/', snippet: 'Merchants and Partners' }, ...bing];
   assert.deepEqual(websearch.relevantOnly(unrelated, 'bridal makeup studio Lahore').map((r) => r.url), bing.map((r) => r.url), 'results sharing no word with the query are dropped');
   const junk = Array.from({ length: 6 }, (_, i) => ({ title: `Surfshark VPN download ${i}`, url: `https://vpn.example/${i}`, snippet: 'Protect your social media accounts with a VPN' }));
-  assert.deepEqual(websearch.relevantOnly([...junk, bing[0]], 'Social Media Management Companies Karachi'), [], 'a page that is mostly unrelated is discarded entirely');
-  assert.equal(websearch.relevantOnly([{ title: 'Pixel Social — social media management agency in Karachi', url: 'https://pixelsocial.pk', snippet: 'Startup agency' }], 'Social Media Management Companies Karachi').length, 1);
+  assert.deepEqual(websearch.relevantOnly([...junk, bing[0]], 'Social Media Management Companies Karachi'), [], 'a page that is mostly unrelated (no city, few query words) is discarded entirely');
+  const genuine = [{ title: 'Pixel Social — social media management agency in Karachi', url: 'https://pixelsocial.pk', snippet: 'Startup agency' }, { title: 'Nail Nook (@nailnook) Instagram', url: 'https://instagram.com/nailnook', snippet: '1,204 followers · nail art by appointment' }, { title: 'Top agencies Karachi', url: 'https://dir.pk/karachi', snippet: 'social media companies list' }, { title: 'Bloom Media Karachi', url: 'https://bloom.pk', snippet: 'we manage social media for startups' }];
+  assert.equal(websearch.relevantOnly(genuine, 'Social Media Management Companies Karachi').length, 3, 'genuine page kept; a result sharing no word is dropped');
 });
 
 test('jina_reader engine answers when direct engines are blocked, and backs off on a Jina 429', async () => {

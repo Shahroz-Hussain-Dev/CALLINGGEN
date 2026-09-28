@@ -68,19 +68,26 @@ function parseJinaMarkdown(md, decodeLink) {
   return out;
 }
 
+const PK_CITIES = ['karachi', 'lahore', 'islamabad', 'rawalpindi', 'faisalabad', 'multan', 'peshawar', 'gujranwala', 'sialkot', 'hyderabad', 'bahawalpur', 'abbottabad', 'quetta', 'sargodha', 'sukkur', 'gujrat', 'sahiwal', 'okara', 'mardan', 'larkana', 'sheikhupura', 'jhelum', 'attock', 'mirpur', 'muzaffarabad', 'pakistan'];
 /**
- * Drops results unrelated to the query: a proxied engine sometimes serves an unrelated cached page
- * (e.g. VPN downloads for a "social media management Karachi" query). A result must share at least two
- * query words (one for very short queries), and when most of a page fails that test the whole page is
- * discarded so the next source is tried.
+ * Drops results unrelated to the query. A proxied engine occasionally serves an unrelated cached page
+ * (e.g. VPN downloads for a "social media management Karachi" query), and such pages still share a word
+ * or two with the query. Each result must share a query word; the page as a whole is discarded when
+ * fewer than a third of its results carry a strong signal (the city named in the query, or three words).
  */
 function relevantOnly(results, query) {
-  const tokens = [...new Set(String(query).toLowerCase().replace(/\bor\b/g, ' ').split(/[^a-z0-9]+/).filter((t) => t.length >= 4))];
+  const q = String(query).toLowerCase();
+  const tokens = [...new Set(q.replace(/\bor\b/g, ' ').split(/[^a-z0-9]+/).filter((t) => t.length >= 4))];
   if (!tokens.length) return results;
-  const need = tokens.length >= 3 ? 2 : 1;
-  const kept = results.filter((r) => { const hay = `${r.title} ${r.snippet} ${r.url}`.toLowerCase(); return tokens.filter((t) => hay.includes(t)).length >= need; });
-  if (results.length >= 5 && kept.length < results.length * 0.3) return [];
-  return kept;
+  const cities = PK_CITIES.filter((c) => new RegExp(`\\b${c}\\b`).test(q));
+  const scored = results.map((r) => {
+    const hay = `${r.title} ${r.snippet} ${r.url}`.toLowerCase();
+    const hits = tokens.filter((t) => hay.includes(t)).length;
+    const strong = hits >= 3 || cities.some((c) => hay.includes(c));
+    return { r, hits, strong };
+  });
+  if (results.length >= 4 && scored.filter((x) => x.strong).length < results.length * 0.3) return [];
+  return scored.filter((x) => x.hits >= 1).map((x) => x.r);
 }
 
 const JINA_READER = 'https://r.jina.ai/';
