@@ -118,3 +118,11 @@ test('chooseTarget works the top-priority niche across cities, skips covered pai
   coverage[generation.coverageKey(nicheRows[0], 'Karachi')] = { attempts: 3, saved: 3, exhausted: true };
   assert.equal(generation.chooseTarget({ nicheRows, cities, priority, coverage }).allExhausted, true);
 });
+
+test('the practitioner named in a clinic\'s business name is used for the own-number lookup', () => {
+  const re = /^(?:dr\.?|doctor)\s+([A-Z][\w.'-]+(?:\s+[A-Z][\w.'-]+){0,3}?)(?=\s+(?:clinic|dental|skin|care|medical|hospital|centre|center|practice|surgery|physio|homeo|eye|child|maternity)|\s*$)/i;
+  assert.equal(re.exec('Dr. Suhail Ahmed Channa Clinic')[1], 'Suhail Ahmed Channa');
+  assert.equal(re.exec('Dr Sana Noor Dental Care')[1], 'Sana Noor');
+  assert.equal(re.exec('Dr Ali')[1], 'Ali');
+  assert.equal(re.exec('Optimal Medical Clinic'), null);
+});

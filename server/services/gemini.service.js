@@ -420,7 +420,12 @@ Return the JSON now (search_notes: say how many distinct qualifying businesses t
   // Owner's / doctor's own number: numbers printed next to a named person on public pages (reception lines skipped).
   let directLookups = 0;
   for (const lead of leads) {
-    const person = [...(lead.owners || []), ...(lead.decision_makers || []), ...(lead.management || [])].find((p) => p && p.name);
+    let person = [...(lead.owners || []), ...(lead.decision_makers || []), ...(lead.management || [])].find((p) => p && p.name);
+    if (!person) {
+      // "Dr. Suhail Ahmed Channa Clinic": the practitioner's name is the business name
+      const m = /^(?:dr\.?|doctor)\s+([A-Z][\w.'-]+(?:\s+[A-Z][\w.'-]+){0,3}?)(?=\s+(?:clinic|dental|skin|care|medical|hospital|centre|center|practice|surgery|physio|homeo|eye|child|maternity)|\s*$)/i.exec(String(lead.business_name || '').trim());
+      if (m) { person = { name: `Dr ${m[1]}`, designation: 'Doctor', source_url: null, contact: null }; lead.owners = [...(lead.owners || []), person]; }
+    }
     if (!person || directLookups >= config.evidence.directLookups || client.remainingMs() < 35000) continue;
     directLookups++;
     try {
