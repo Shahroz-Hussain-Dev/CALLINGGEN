@@ -133,7 +133,7 @@ function parseDdgLite(html) {
 
 const engineBlockedUntil = new Map(); // engine -> timestamp (blocked / rate-limited engines are skipped for a while)
 const ENGINE_COOLDOWN_MS = 30 * 60 * 1000;
-const emptyStreak = new Map(); // engine -> consecutive empty answers (an engine that keeps returning nothing is soft-throttling us)
+const emptyStreak = new Map(); // engine -> consecutive queries where it answered nothing but a later engine found results (silent throttling)
 const EMPTY_STREAK_LIMIT = 2;
 const EMPTY_COOLDOWN_MS = 10 * 60 * 1000;
 class BlockedError extends Error { constructor(msg, cooldownMs) { super(msg); this.blocked = true; this.cooldownMs = cooldownMs || ENGINE_COOLDOWN_MS; } }
@@ -288,17 +288,19 @@ async function search(query, { count = 8 } = {}) {
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.results;
   let lastErr = null;
   let sawEmpty = false;
+  const silent = []; // engines that answered nothing for this query
   for (const name of activeEngines()) {
     try {
       const results = await engines[name](query, count);
-      if (!results.length) { // an engine with no answer: let the next one try; repeated silence means it is throttling us
-        sawEmpty = true;
-        const streak = (emptyStreak.get(name) || 0) + 1;
-        emptyStreak.set(name, streak);
-        if (streak >= EMPTY_STREAK_LIMIT && activeEngines().length > 1) { engineBlockedUntil.set(name, Date.now() + EMPTY_COOLDOWN_MS); logger.warn('Web search engine demoted after repeated empty answers', { engine: name }); }
-        continue;
-      }
+      if (!results.length) { sawEmpty = true; silent.push(name); continue; } // no answer: let the next engine try
       emptyStreak.set(name, 0);
+      // An engine that answered nothing while a later engine found results is soft-throttling us (a query with
+      // genuinely no results penalizes nobody): demote it after it happens twice in a row.
+      for (const s of silent) {
+        const streak = (emptyStreak.get(s) || 0) + 1;
+        emptyStreak.set(s, streak);
+        if (streak >= EMPTY_STREAK_LIMIT) { engineBlockedUntil.set(s, Date.now() + EMPTY_COOLDOWN_MS); emptyStreak.set(s, 0); logger.warn('Web search engine demoted: silent while another engine answered', { engine: s, answered_by: name }); }
+      }
       cache.set(key, { at: Date.now(), results, engine: name });
       return results;
     } catch (err) {

@@ -119,18 +119,25 @@ test('jina_reader engine answers when direct engines are blocked, and backs off 
   } finally { websearch.setFetchForTests(null); websearch.resetForTests(); }
 });
 
-test('an engine that keeps answering nothing is demoted so the next engine gets tried first', async () => {
+test('an engine that stays silent while another engine answers is demoted; queries with no results anywhere penalize nobody', async () => {
   websearch.resetForTests();
   const md = JINA_LITE_MD;
+  let jinaAnswers = true;
   websearch.setFetchForTests(async (url) => {
-    if (/^https:\/\/r\.jina\.ai\//.test(url)) return { status: 200, headers: { get: () => null }, text: async () => md };
-    return { status: 200, text: async () => '<html><body>no results</body></html>' }; // direct DuckDuckGo: 200 but empty
+    if (/^https:\/\/r\.jina\.ai\//.test(url)) return { status: 200, headers: { get: () => null }, text: async () => (jinaAnswers ? md : 'Title: x\n\nMarkdown Content:\nNo results.') };
+    return { status: 200, text: async () => '<html><body>no results</body></html>' }; // direct DuckDuckGo and Bing: 200 but empty
   });
   try {
+    jinaAnswers = false;
+    await websearch.search('obscure query one', { count: 5 });
+    await websearch.search('obscure query two', { count: 5 });
+    let d = await websearch.describe();
+    assert.deepEqual(d.blocked, [], 'nothing found by any engine: no demotion');
+    jinaAnswers = true;
     await websearch.search('q1', { count: 5 });
     await websearch.search('q2', { count: 5 });
-    const d = await websearch.describe();
-    assert.ok(d.blocked.includes('duckduckgo'), 'duckduckgo demoted after two empty answers: ' + JSON.stringify(d));
+    d = await websearch.describe();
+    assert.ok(d.blocked.includes('duckduckgo'), 'duckduckgo demoted after being silent twice while jina_reader answered: ' + JSON.stringify(d));
     assert.equal(d.engine, 'jina_reader');
   } finally { websearch.setFetchForTests(null); websearch.resetForTests(); }
 });
