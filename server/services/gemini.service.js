@@ -359,6 +359,7 @@ function useEvidenceMode(webSearch) {
 async function generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage, criteria = null }) {
   const niche = niches[0];
   const ev = await evidence.gather({ panel, niche, city, criteria, timeBudgetMs: Math.max(15000, Math.min(config.evidence.timeBudgetMs, client.remainingMs() - 90000)) });
+  if (!ev.results.length) throw new AppError('Web research returned no results for this niche and city (the free search engines may be rate-limited right now). The batch will be retried.', 503, 'ai_unavailable');
   const rendered = evidence.render(ev);
   const userText = `${prompts.buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled: true, criteria }).replace(/Return the leads by calling submit_leads once\./, '').replace(/Web search is available: use it to find and confirm each business before including it\./, 'Use ONLY the evidence below.')}
 

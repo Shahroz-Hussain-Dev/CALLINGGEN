@@ -135,13 +135,26 @@ async function gatherUncached({ panel, niche, city, criteria, timeBudgetMs, maxP
   const started = Date.now();
   const queries = buildQueries({ panel, niche, city, criteria });
   const seen = new Map(); // url -> result
-  for (const q of queries) {
-    if (Date.now() - started > timeBudgetMs * 0.65) break;
-    const results = await websearch.search(q, { count: 10 });
-    for (const r of results) {
-      let host; try { host = new URL(r.url).hostname.replace(/^www\./, ''); } catch (_) { continue; }
-      if (SKIP_HOSTS.test(host)) continue;
-      if (!seen.has(r.url)) seen.set(r.url, { ...r, host, queries: [q] }); else seen.get(r.url).queries.push(q);
+  const runQueries = async () => {
+    for (const q of queries) {
+      if (Date.now() - started > timeBudgetMs * 0.65) break;
+      const results = await websearch.search(q, { count: 10 });
+      for (const r of results) {
+        let host; try { host = new URL(r.url).hostname.replace(/^www\./, ''); } catch (_) { continue; }
+        if (SKIP_HOSTS.test(host)) continue;
+        if (!seen.has(r.url)) seen.set(r.url, { ...r, host, queries: [q] }); else seen.get(r.url).queries.push(q);
+      }
+    }
+  };
+  await runQueries();
+  if (!seen.size) {
+    // Nothing at all usually means the search engines are cooling down after a rate limit: wait it out once when it is short.
+    const wait = Math.min(...['jina_reader', 'duckduckgo', 'serper', 'brave', 'tavily', 'jina', 'google_cse'].map((e) => websearch.blockedFor(e)).filter((ms) => ms > 0), Infinity);
+    if (Number.isFinite(wait) && wait <= 100000 && Date.now() - started + wait < timeBudgetMs * 0.6) {
+      logger.warn('Evidence gathering found nothing; waiting for the search engine cooldown', { wait_ms: wait });
+      await new Promise((r) => setTimeout(r, wait + 500));
+      websearch.cache.clear();
+      await runQueries();
     }
   }
   const results = [...seen.values()];

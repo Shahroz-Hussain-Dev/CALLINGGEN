@@ -293,6 +293,8 @@ function engineChain() {
   if (!free.includes(preferred) && chain.includes(preferred)) { const i = chain.indexOf(preferred); if (i > 0) { chain.splice(i, 1); chain.unshift(preferred); } }
   return chain;
 }
+/** Milliseconds until the engine leaves its cooldown (0 when it is live). */
+function blockedFor(name) { return Math.max(0, (engineBlockedUntil.get(name) || 0) - Date.now()); }
 function activeEngines() { const now = Date.now(); const all = engineChain(); const live = all.filter((e) => (engineBlockedUntil.get(e) || 0) <= now); return live.length ? live : all; }
 
 /** Searches the web. Never throws for a single engine failure; returns [] when every engine fails. */
@@ -306,7 +308,8 @@ async function search(query, { count = 8 } = {}) {
   const silent = []; // engines that answered nothing for this query
   for (const name of activeEngines()) {
     try {
-      const results = await engines[name](query, count);
+      const raw = await engines[name](query, count);
+      const results = FREE_ENGINES.includes(name) ? relevantOnly(raw, query) : raw; // a throttled free engine may answer with unrelated items
       if (!results.length) { sawEmpty = true; silent.push(name); continue; } // no answer: let the next engine try
       emptyStreak.set(name, 0);
       // An engine that answered nothing while a later engine found results is soft-throttling us (a query with
@@ -332,4 +335,4 @@ async function search(query, { count = 8 } = {}) {
 async function describe() { await loadKeys(); const chain = engineChain(); const live = activeEngines(); return { engine: live[0], engines: chain, blocked: chain.filter((e) => !live.includes(e)), keyed: chain.filter((e) => !FREE_ENGINES.includes(e)), free: FREE_ENGINES.includes(live[0]) }; }
 function resetForTests() { cache.clear(); engineBlockedUntil.clear(); emptyStreak.clear(); lastRequestAt = 0; lastBingAt = 0; lastJinaAt = 0; jinaRateLimitedUntil = 0; settings.clearKeyCache(); }
 
-module.exports = { search, describe, readViaJina, relevantOnly, setFetchForTests, resetForTests, parseDdgHtml, parseDdgLite, parseBingRss, parseJinaMarkdown, decodeDdgUrl, decodeBingUrl, decodeEntities, engines, cache, FREE_ENGINES };
+module.exports = { search, describe, blockedFor, readViaJina, relevantOnly, setFetchForTests, resetForTests, parseDdgHtml, parseDdgLite, parseBingRss, parseJinaMarkdown, decodeDdgUrl, decodeBingUrl, decodeEntities, engines, cache, FREE_ENGINES };

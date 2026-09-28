@@ -31,7 +31,7 @@ test('parses Bing RSS results and fails over to Bing when DuckDuckGo is blocked'
   try {
     const a = await websearch.search('bridal makeup Lahore', { count: 5 });
     assert.equal(a.length, 1);
-    const b = await websearch.search('another query', { count: 5 });
+    const b = await websearch.search('makeup studio Lahore whatsapp', { count: 5 });
     assert.equal(b.length, 1);
     assert.equal(hits.filter((h) => /^https:\/\/(html|lite)\.duckduckgo/.test(h)).length, 1, 'DuckDuckGo is skipped after being blocked once');
     assert.ok((await websearch.describe()).blocked.includes('duckduckgo'));
@@ -255,4 +255,27 @@ test('keyed engines (Serper, Jina, Tavily) come first when their keys are stored
     const r2 = await websearch.search('salon Karachi', { count: 5 });
     assert.equal(r2[0].url, 'https://facebook.com/noor');
   } finally { websearch.setFetchForTests(null); websearch.resetForTests(); storedKeys = {}; }
+});
+
+test('search() applies the relevance filter to the free engines, so a throttled engine answering with unrelated items is skipped', async () => {
+  websearch.resetForTests();
+  const rss = '<?xml version="1.0"?><rss><channel>' + Array.from({ length: 6 }, (_, i) => `<item><title>Bulgarian news ${i}</title><link>https://news.example/${i}</link><description>Sofia headlines</description></item>`).join('') + '</channel></rss>';
+  websearch.setFetchForTests(async (url) => {
+    if (/^https:\/\/r\.jina\.ai\//.test(url)) return { status: 200, headers: { get: () => null }, text: async () => JINA_LITE_MD };
+    if (/duckduckgo/.test(url)) return { status: 403, text: async () => 'blocked' };
+    return { ok: true, status: 200, text: async () => rss };
+  });
+  try {
+    const r = await websearch.search('bridal makeup studio Lahore', { count: 5 });
+    assert.equal(r.length, 2, 'jina answered after direct DuckDuckGo was blocked');
+    websearch.resetForTests();
+    websearch.setFetchForTests(async (url) => {
+      if (/^https:\/\/r\.jina\.ai\//.test(url)) return { status: 429, headers: { get: () => null }, text: async () => 'rate limited' };
+      if (/duckduckgo/.test(url)) return { status: 403, text: async () => 'blocked' };
+      return { ok: true, status: 200, text: async () => rss };
+    });
+    const junk = await websearch.search('bridal makeup studio Lahore', { count: 5 });
+    assert.deepEqual(junk, [], 'unrelated news items from Bing RSS are not treated as results');
+    assert.ok(websearch.blockedFor('jina_reader') > 0 && websearch.blockedFor('jina_reader') <= 90000, 'jina_reader is cooling down after the 429');
+  } finally { websearch.setFetchForTests(null); websearch.resetForTests(); }
 });
