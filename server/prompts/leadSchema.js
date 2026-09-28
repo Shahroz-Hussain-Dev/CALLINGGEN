@@ -46,6 +46,8 @@ const leadProperties = {
   team_size_estimate: { ...nullableInteger, description: 'Estimated number of people working in the business when the evidence gives a signal; null otherwise.' },
   female_led: { ...nullableBoolean, description: 'true when the owner/founder/lead is a woman according to the evidence, false when a man, null when unknown.' },
   startup_signals: { ...stringArray, description: 'Short quotes copied verbatim from the sources showing the business is new, small or female-led. Empty when none.' },
+  opening_quote: { ...nullableString, description: 'Verbatim quote of the opening announcement ("now open", "grand opening", "newly opened", "opening soon") when a source has one; null otherwise.' },
+  opened_on: { ...nullableString, description: 'Opening date stated in the sources as YYYY-MM-DD or YYYY-MM; null when no date is stated.' },
   business_locations: stringArray,
   departments: { ...stringArray, description: 'Departments only if evident from sources (e.g. sales team, support team); otherwise empty.' },
   owners: { type: 'array', items: personSchema() },

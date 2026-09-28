@@ -1,6 +1,7 @@
 'use strict';
 const db = require('../db');
 const criteria = require('../lib/criteria');
+const scoring = require('../lib/scoring');
 const { ValidationError } = require('../lib/errors');
 const activity = require('./activity.service');
 const { encrypt, decrypt, encryptionAvailable } = require('../lib/crypto');
@@ -17,7 +18,11 @@ const DEFAULTS = {
   timezone: 'Asia/Karachi',
   target_cities: ['Karachi', 'Lahore', 'Islamabad', 'Rawalpindi', 'Faisalabad', 'Multan', 'Peshawar', 'Gujranwala', 'Sialkot', 'Hyderabad', 'Bahawalpur', 'Abbottabad'],
   default_meeting_duration_minutes: 60,
-  lead_criteria: { stage: 'any', founded_from_year: null, max_employees: null, leadership: 'any', max_followers: null, notes: '' },
+  lead_criteria: { stage: 'any', founded_from_year: null, max_employees: null, leadership: 'any', max_followers: null, max_age_days: null, notes: '' },
+  lead_scoring: scoring.DEFAULT_CONFIG,
+  // Strategy-panel niche priority (best first). When a niche is exhausted in every target city, generation moves to the next one.
+  niche_priority: ['Newly Opened Doctor Clinics', 'Dental Clinics', 'Dermatology and Skin Clinics', 'Physiotherapy Clinics', "Gynecology and Women's Health Clinics", 'Pediatric Clinics', 'Eye Clinics and Optometrists', 'Aesthetic Clinics', 'Skin Care Clinics', 'Laser Hair Removal Clinics', 'Nutritionist and Diet Clinics', 'Psychologist and Counselling Practices', 'Diagnostic Labs and Collection Points', 'Veterinary Clinics', 'Homeopathic and Hikmat Clinics', 'Bridal Makeup Studios', 'Makeup Artists with Private Studios', 'Nail Art Studios', "Ladies' Beauty Salons"],
+  auto_switch_niche: true,
 };
 
 const EDITABLE = {
@@ -31,6 +36,9 @@ const EDITABLE = {
   target_cities: (v) => { if (!Array.isArray(v) || !v.length || v.some((c) => typeof c !== 'string' || !c.trim())) throw new ValidationError('target_cities must be a non-empty list of city names'); return v.map((c) => c.trim()).slice(0, 60); },
   default_meeting_duration_minutes: (v) => { const n = parseInt(v, 10); if (!(n >= 15 && n <= 480)) throw new ValidationError('default_meeting_duration_minutes must be 15-480'); return n; },
   lead_criteria: (v) => criteria.normalize(v),
+  lead_scoring: (v) => scoring.normalize(v),
+  niche_priority: (v) => { if (!Array.isArray(v)) throw new ValidationError('niche_priority must be a list of niche names'); const out = [...new Set(v.map((x) => String(x || '').trim()).filter(Boolean))]; if (out.length > 200) throw new ValidationError('niche_priority is too long'); return out; },
+  auto_switch_niche: (v) => !!v,
   // Web research API keys: stored encrypted; empty string clears a key; undefined keeps it.
   web_search_keys: (v, current) => {
     if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new ValidationError('web_search_keys must be an object');
@@ -92,7 +100,8 @@ async function update(user, patch) {
 /** System settings safe to send to the owner UI (API keys masked). */
 async function getAllPublic(client) {
   const all = await getAll(client);
-  return { ...all, web_search_keys: maskKeys(decryptKeys(all.web_search_keys)) };
+  const ls = scoring.normalize(all.lead_scoring);
+  return { ...all, lead_scoring: { ...ls, labels: Object.fromEntries(scoring.FEATURES.map(([k, label]) => [k, label])) }, web_search_keys: maskKeys(decryptKeys(all.web_search_keys)) };
 }
 
 let keyCache = { at: 0, keys: {} };

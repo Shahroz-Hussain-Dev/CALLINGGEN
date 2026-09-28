@@ -96,7 +96,7 @@ let jinaRateLimitedUntil = 0; // key-less Jina Reader allows ~20 requests/minute
 /** Fetches a URL rendered as markdown by Jina Reader (key-less; the JINA_API_KEY raises the rate limit when set). */
 async function readViaJina(targetUrl, { timeoutMs = config.websearch.timeoutMs } = {}) {
   if (jinaRateLimitedUntil > Date.now()) throw new BlockedError('Jina Reader rate limit cooldown', jinaRateLimitedUntil - Date.now());
-  const wait = lastJinaAt + config.websearch.jinaGapMs - Date.now();
+  const wait = lastJinaAt + (keys.jina ? config.websearch.jinaKeyedGapMs : config.websearch.jinaGapMs) - Date.now();
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   lastJinaAt = Date.now();
   const headers = { Accept: 'text/plain', 'X-Timeout': String(Math.max(5, Math.floor(timeoutMs / 1000) - 3)), 'X-Return-Format': 'markdown' };
@@ -226,9 +226,9 @@ const engines = {
     return results.slice(0, count);
   },
   /** Key-less proxy engine: search result pages rendered by Jina Reader (works where engines block cloud IPs). */
-  async jina_reader(query, count) {
+  async jina_reader(query, count, { recency } = {}) {
     const sources = [
-      ['duckduckgo_lite', `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}&kl=pk-en`, decodeDdgUrl],
+      ['duckduckgo_lite', `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}&kl=pk-en${recency ? `&df=${recency}` : ''}`, decodeDdgUrl],
       ['bing', `https://www.bing.com/search?q=${encodeURIComponent(query)}&mkt=en-PK&setlang=en`, decodeBingUrl],
     ];
     let lastErr = null;
@@ -244,12 +244,13 @@ const engines = {
     if (lastErr) throw lastErr;
     return [];
   },
-  async duckduckgo(query, count) {
-    let r = await getHtml('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query) + '&kl=pk-en');
+  async duckduckgo(query, count, { recency } = {}) {
+    const df = recency ? `&df=${recency}` : '';
+    let r = await getHtml('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query) + '&kl=pk-en' + df);
     if (r.status === 403 || r.status === 202 || r.status === 429) throw new BlockedError(`DuckDuckGo returned HTTP ${r.status}`);
     let results = r.status === 200 ? parseDdgHtml(r.text) : [];
     if (!results.length) {
-      r = await getHtml('https://lite.duckduckgo.com/lite/?q=' + encodeURIComponent(query) + '&kl=pk-en');
+      r = await getHtml('https://lite.duckduckgo.com/lite/?q=' + encodeURIComponent(query) + '&kl=pk-en' + df);
       if (r.status === 403 || r.status === 202 || r.status === 429) throw new BlockedError(`DuckDuckGo returned HTTP ${r.status}`);
       results = r.status === 200 ? parseDdgLite(r.text) : [];
       if (!results.length && r.status !== 200) throw new Error(`DuckDuckGo returned HTTP ${r.status}`);
@@ -297,10 +298,14 @@ function engineChain() {
 function blockedFor(name) { return Math.max(0, (engineBlockedUntil.get(name) || 0) - Date.now()); }
 function activeEngines() { const now = Date.now(); const all = engineChain(); const live = all.filter((e) => (engineBlockedUntil.get(e) || 0) <= now); return live.length ? live : all; }
 
-/** Searches the web. Never throws for a single engine failure; returns [] when every engine fails. */
-async function search(query, { count = 8 } = {}) {
+/**
+ * Searches the web. recency: 'd' | 'w' | 'm' | 'y' limits results to recently published pages (DuckDuckGo df
+ * parameter; engines without the option ignore it). Never throws for a single engine failure; returns [] when
+ * every engine fails.
+ */
+async function search(query, { count = 8, recency = null } = {}) {
   await loadKeys();
-  const key = `${query}|${count}`;
+  const key = `${query}|${count}|${recency || ''}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.results;
   let lastErr = null;
@@ -308,8 +313,8 @@ async function search(query, { count = 8 } = {}) {
   const silent = []; // engines that answered nothing for this query
   for (const name of activeEngines()) {
     try {
-      const raw = await engines[name](query, count);
-      const results = FREE_ENGINES.includes(name) ? relevantOnly(raw, query) : raw; // a throttled free engine may answer with unrelated items
+      const raw = await engines[name](query, count, { recency });
+      const results = (FREE_ENGINES.includes(name) ? relevantOnly(raw, query) : raw).map((r) => (recency ? { ...r, recent: recency } : r)); // a throttled free engine may answer with unrelated items
       if (!results.length) { sawEmpty = true; silent.push(name); continue; } // no answer: let the next engine try
       emptyStreak.set(name, 0);
       // An engine that answered nothing while a later engine found results is soft-throttling us (a query with

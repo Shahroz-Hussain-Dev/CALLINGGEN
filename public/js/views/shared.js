@@ -8,7 +8,7 @@ export function contactRowHtml(c, { showOwner = false, showPanel = false } = {})
   return html`<tr class="clickable" data-id="${c.id}">
     <td><div><b>${c.business_name}</b>${c.is_demo ? ' ' : ''}${c.is_demo ? badge('DEMO', 'warning') : raw('')}</div><span class="sub">${c.niche || '—'}${showPanel ? raw(' · ' + panelBadge(c.contact_type)) : raw('')}</span></td>
     <td>${c.city || '—'}</td>
-    <td>${c.phone ? raw(`<a href="${telHref(c.phone)}">${esc(c.phone)}</a>`) : raw('<span class="faint">no phone</span>')}<span class="sub">${raw(websiteBadge(c.website_available))}</span></td>
+    <td>${c.phone ? raw(`<a href="${telHref(c.phone)}">${esc(c.phone)}</a>`) : raw('<span class="faint">no phone</span>')}<span class="sub">${raw(websiteBadge(c.website_available))}${c.sell_score !== null && c.sell_score !== undefined ? raw(` <span class="badge ${Number(c.sell_score) >= 70 ? 'success' : Number(c.sell_score) >= 45 ? 'info' : 'neutral'}" title="Sell probability">${Math.round(Number(c.sell_score))}%</span>`) : raw('')}</span></td>
     <td>${c.company_size || '—'}</td>
     ${showOwner ? html`<td>${c.current_owner_name || '—'}<span class="sub">from ${c.original_owner_name || '—'}</span></td>` : raw('')}
     <td>${raw(statusBadge(c.contact_status))}<span class="sub">${raw(interestBadge(c.interest_level))}</span></td>

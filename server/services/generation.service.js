@@ -19,6 +19,7 @@ const duplicates = require('./duplicates.service');
 const search = require('./search');
 const listsService = require('./lists.service');
 const criteriaLib = require('../lib/criteria');
+const scoringLib = require('../lib/scoring');
 
 const LOCK_TTL_MS = 2 * 60 * 1000;
 
@@ -84,7 +85,7 @@ function prepareCandidate(raw, { panel, nicheRows, city, criteria = null }) {
   let cityCorrectedFrom = null;
   const landlineCity = norm.cityFromPhone(phone) || norm.cityFromPhone(whatsapp);
   if (landlineCity && cityName && landlineCity.toLowerCase() !== cityName.toLowerCase() && !(landlineCity === 'Islamabad' && cityName === 'Rawalpindi')) { cityCorrectedFrom = cityName; cityName = landlineCity; }
-  const people = (arr) => (Array.isArray(arr) ? arr.filter((p) => p && p.name).map((p) => ({ name: String(p.name).trim(), designation: p.designation ? String(p.designation) : null, source_url: p.source_url || null, contact: p.contact || null })) : []);
+  const people = (arr) => (Array.isArray(arr) ? arr.filter((p) => p && p.name).map((p) => ({ name: String(p.name).trim(), designation: p.designation ? String(p.designation) : null, source_url: p.source_url || null, contact: p.contact || null, ...(p.contact_kind ? { contact_kind: p.contact_kind, contact_source: p.contact_source || null } : {}) })) : []);
   const strs = (arr) => (Array.isArray(arr) ? arr.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()) : []);
   const fv = raw.field_verification && typeof raw.field_verification === 'object' ? raw.field_verification : {};
   const intOrNull = (x) => (x === null || x === undefined || x === '' || !Number.isFinite(Number(x)) ? null : Math.round(Number(x)));
@@ -93,10 +94,15 @@ function prepareCandidate(raw, { panel, nicheRows, city, criteria = null }) {
     female_led: typeof raw.female_led === 'boolean' ? raw.female_led : null,
     startup_signals: strs(raw.startup_signals).slice(0, 5), audience: raw.audience && typeof raw.audience === 'object' ? raw.audience : null,
     criteria_match: raw.criteria_match || null,
+    opening: raw.opening && typeof raw.opening === 'object' ? raw.opening : null,
+    direct_contact: raw.direct_contact && typeof raw.direct_contact === 'object' ? raw.direct_contact : null,
+    sell_probability: Number.isFinite(Number(raw.sell_probability)) && raw.sell_probability !== null && raw.sell_probability !== undefined ? Number(raw.sell_probability) : null,
+    score_points: Number.isFinite(Number(raw.score_points)) && raw.score_points !== null && raw.score_points !== undefined ? Number(raw.score_points) : null,
+    score_breakdown: Array.isArray(raw.score_breakdown) ? raw.score_breakdown.slice(0, 12) : [],
     ...(cityCorrectedFrom ? { city_corrected_from: cityCorrectedFrom } : {}),
   };
   if (criteriaLib.isActive(criteria)) {
-    const chk = criteriaLib.check({ ...raw, ...targeting }, criteria, { followers: targeting.audience ? targeting.audience.instagram_followers : null });
+    const chk = criteriaLib.check({ ...raw, ...targeting }, criteria, { followers: targeting.audience ? targeting.audience.instagram_followers : null, opening: targeting.opening });
     if (!chk.ok) return { ok: false, reason: chk.reason };
     targeting.criteria_match = targeting.criteria_match || chk.match;
   }
@@ -131,6 +137,7 @@ function prepareCandidate(raw, { panel, nicheRows, city, criteria = null }) {
     automation_opportunities: Array.isArray(raw.automation_opportunities) ? raw.automation_opportunities.filter((o) => o && o.process).map((o) => ({ process: String(o.process), opportunity: String(o.opportunity || ''), latechs_service: String(o.latechs_service || '') })) : [],
     field_verification: { business_name: fv.business_name || 'unknown', phone: fv.phone || 'unknown', website: fv.website || 'unknown', address: fv.address || 'unknown', social_profiles: fv.social_profiles || 'unknown', people: fv.people || 'unknown' },
     source_urls: strs(raw.source_urls).slice(0, 25),
+    sell_score: targeting.sell_probability,
     claimed_confidence: raw.confidence || 'needs_verification',
     qualification_notes: raw.qualification_notes || null,
     handles,
@@ -155,12 +162,34 @@ function computeDataStatus(contact, { webSearchUsed, providerResult }) {
   return contact.claimed_confidence === 'estimated' ? 'estimated' : 'needs_verification';
 }
 
-function pickCityAndNiche(job, list, cities) {
+const COVERAGE_EXHAUSTED_ATTEMPTS = 2; // a niche/city pair that produced nothing this many times is covered
+const coverageKey = (niche, city) => `${niche ? niche.id || niche.name : 'any'}|${String(city).toLowerCase()}`;
+
+/**
+ * Picks the next niche/city to research from the list's coverage map: niches in priority order (the global
+ * niche_priority first, then the list's own order), cities in the configured order, skipping pairs that are
+ * exhausted. Returns { niche, city, exhaustedNiches, allExhausted }.
+ */
+function chooseTarget({ nicheRows, cities, priority = [], coverage = {} }) {
+  const cityList = cities.length ? cities : ['Lahore'];
+  const pri = priority.map((n) => String(n).toLowerCase());
+  const ordered = [...nicheRows].sort((a, b) => { const ia = pri.indexOf(String(a.name).toLowerCase()); const ib = pri.indexOf(String(b.name).toLowerCase()); return (ia < 0 ? 1e6 : ia) - (ib < 0 ? 1e6 : ib); });
+  const exhaustedNiches = [];
+  for (const niche of ordered.length ? ordered : [null]) {
+    let best = null;
+    for (const city of cityList) {
+      const c = coverage[coverageKey(niche, city)] || { attempts: 0, saved: 0 };
+      if (c.exhausted) continue;
+      if (!best || c.attempts < best.c.attempts) best = { city, c };
+    }
+    if (best) return { niche, city: best.city, exhaustedNiches, allExhausted: false };
+    if (niche) exhaustedNiches.push(niche.name);
+  }
+  return { niche: null, city: cityList[0], exhaustedNiches, allExhausted: true };
+}
+function pickCityAndNiche(job, list, cities, priority = []) {
   const nicheRows = Array.isArray(list.selected_niches) ? list.selected_niches : [];
-  const attempt = job.attempts || 0;
-  const niche = nicheRows.length ? nicheRows[attempt % nicheRows.length] : null;
-  const city = cities.length ? cities[Math.floor(attempt / Math.max(1, nicheRows.length)) % cities.length] : 'Lahore';
-  return { niche, city };
+  return chooseTarget({ nicheRows, cities, priority, coverage: list.coverage || {} });
 }
 
 /** Runs a single batch for a job. Returns the updated job view plus batch summary. */
@@ -196,10 +225,31 @@ async function runBatch(user, jobId, { forceUnlock = false, timeBudgetMs } = {})
     return { job: jobView(await getJob(id)), batch: null };
   }
   const count = Math.min(batchSize, remaining);
-  const { niche, city } = pickCityAndNiche(job, list, all.target_cities || []);
-  const nicheRows = Array.isArray(list.selected_niches) ? list.selected_niches : [];
+  const nichePriority = Array.isArray(all.niche_priority) ? all.niche_priority : [];
+  let target = pickCityAndNiche(job, list, all.target_cities || [], nichePriority);
+  let nicheRows = Array.isArray(list.selected_niches) ? list.selected_niches : [];
+  if (target.allExhausted && all.auto_switch_niche !== false && job.contact_type === 'strategy') {
+    // Every selected niche is covered in every target city: switch to the next best niche not yet on this list.
+    const niches = require('./niches.service');
+    const available = await niches.list({ panel: job.contact_type });
+    const have = new Set(nicheRows.map((n) => String(n.name).toLowerCase()));
+    const next = nichePriority.map((name) => available.find((n) => n.name.toLowerCase() === String(name).toLowerCase())).find((n) => n && !have.has(n.name.toLowerCase()));
+    if (next) {
+      nicheRows = [...nicheRows, { id: next.id, name: next.name, category: next.category }];
+      await db.query('UPDATE contact_lists SET selected_niches = $2 WHERE id = $1', [job.list_id, JSON.stringify(nicheRows)]);
+      await activity.log('niche_switched', { userId: user.id, listId: job.list_id, details: { exhausted: target.exhaustedNiches, next: next.name } });
+      target = chooseTarget({ nicheRows, cities: all.target_cities || [], priority: nichePriority, coverage: list.coverage || {} });
+    }
+  }
+  if (target.allExhausted) {
+    await finishJob(id, 'exhausted', null);
+    await activity.log('generation_exhausted', { userId: user.id, listId: job.list_id, details: { have: Number(list.contact_count), requested: job.requested_count, exhausted_niches: target.exhaustedNiches, reason: 'all niches covered in every target city' } });
+    return { job: jobView(await getJob(id)), batch: null };
+  }
+  const { niche, city } = target;
   const nicheNames = niche ? [niche.name] : nicheRows.map((n) => n.name);
   const criteria = criteriaLib.normalize(list.criteria && Object.keys(list.criteria).length ? list.criteria : all.lead_criteria);
+  const scoringCfg = scoringLib.normalize(all.lead_scoring);
 
   // Exclusions: businesses already known in this niche/city + rejected candidates for this job
   const { rows: known } = await db.query(
@@ -212,7 +262,7 @@ async function runBatch(user, jobId, { forceUnlock = false, timeBudgetMs } = {})
   const summary = { requested: count, received: 0, saved: 0, duplicates: 0, rejected: 0, needs_verification: 0, verified: 0, niche: nicheNames.join(', '), city, web_search_used: false, search_notes: '', model: null, provider: ai.activeName(), errors: [], criteria: criteriaLib.isActive(criteria) ? criteriaLib.describe(criteria) : null };
   let generated;
   try {
-    generated = await ai.generateLeadCandidates({ userId: user.role === 'owner' && job.current_owner_id !== user.id ? job.current_owner_id : user.id, panel: job.contact_type, niches: nicheNames, city, count, excludeNames, criteria, ...(timeBudgetMs ? { timeBudgetMs } : {}) });
+    generated = await ai.generateLeadCandidates({ userId: user.role === 'owner' && job.current_owner_id !== user.id ? job.current_owner_id : user.id, panel: job.contact_type, niches: nicheNames, city, count, excludeNames, criteria, nichePriority, scoring: scoringCfg, ...(timeBudgetMs ? { timeBudgetMs } : {}) });
   } catch (err) {
     const mapped = ai.mapError(err);
     logger.warn('Lead generation batch failed', { jobId: id, code: mapped.code, message: mapped.message });
@@ -230,7 +280,7 @@ async function runBatch(user, jobId, { forceUnlock = false, timeBudgetMs } = {})
   summary.sources = (generated.sources || []).length;
   for (const rj of generated.rejected || []) {
     summary.rejected++;
-    await db.query('INSERT INTO generation_rejections (job_id, list_id, business_name, normalized_name, reason, details) VALUES ($1, $2, $3, $4, $5, $6)', [id, job.list_id, String(rj.business_name || 'unknown').slice(0, 200), null, rj.reason || 'not_in_evidence', JSON.stringify({ city, stage: 'evidence_verification' })]);
+    await db.query('INSERT INTO generation_rejections (job_id, list_id, business_name, normalized_name, reason, details) VALUES ($1, $2, $3, $4, $5, $6)', [id, job.list_id, String(rj.business_name || 'unknown').slice(0, 200), null, rj.reason || 'not_in_evidence', JSON.stringify({ city, stage: 'evidence_verification', ...(rj.details || {}) })]);
   }
   summary.search_notes = String(generated.searchNotes || '').slice(0, 1000);
   const provider = search.getProvider();
@@ -270,13 +320,13 @@ async function runBatch(user, jobId, { forceUnlock = false, timeBudgetMs } = {})
           `INSERT INTO contacts (business_name, normalized_business_name, industry, niche, niche_id, business_description, website, normalized_website_domain, website_available,
              phone, normalized_phone, public_email, address, city, country, social_profiles, company_size, employee_count_estimate, business_locations, departments,
              management_data, decision_makers, contact_type, contact_list_id, current_owner_id, original_owner_id, business_operations, automation_opportunities,
-             data_status, field_verification, source_urls, generation_source, generation_timestamp, generation_job_id, notes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,now(),$33,$34)
+             data_status, field_verification, source_urls, generation_source, generation_timestamp, generation_job_id, notes, sell_score)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,now(),$33,$34,$35)
            ON CONFLICT DO NOTHING RETURNING id`,
           [c.business_name, c.normalized_business_name, c.industry, c.niche, c.niche_id, c.business_description, c.website, c.normalized_website_domain, c.website_available,
             c.phone, c.normalized_phone, c.public_email, c.address, c.city, c.country, JSON.stringify(c.social_profiles), c.company_size, c.employee_count_estimate, JSON.stringify(c.business_locations), JSON.stringify(c.departments),
             JSON.stringify(c.management_data), JSON.stringify(c.decision_makers), job.contact_type, job.list_id, job.current_owner_id, job.original_owner_id, JSON.stringify({ ...c.business_operations, provider_verification: c.provider_verification || null }), JSON.stringify(c.automation_opportunities),
-            dataStatus, JSON.stringify(c.field_verification), JSON.stringify([...new Set(c.source_urls)]), `${ai.activeName()}${generated.webSearchUsed ? '+web_search' : ''}`, id, c.qualification_notes ? `Qualification: ${c.qualification_notes}` : null],
+            dataStatus, JSON.stringify(c.field_verification), JSON.stringify([...new Set(c.source_urls)]), `${ai.activeName()}${generated.webSearchUsed ? '+web_search' : ''}`, id, c.qualification_notes ? `Qualification: ${c.qualification_notes}` : null, c.sell_score],
         );
         if (!rows[0]) {
           await client.query('INSERT INTO generation_rejections (job_id, list_id, business_name, normalized_name, reason, details) VALUES ($1, $2, $3, $4, $5, $6)', [id, job.list_id, c.business_name, c.normalized_business_name, 'duplicate', JSON.stringify({ match_reason: 'unique_index' })]);
@@ -312,6 +362,15 @@ async function runBatch(user, jobId, { forceUnlock = false, timeBudgetMs } = {})
        verified_count = verified_count + $6, attempts = attempts + 1, empty_attempts = $7, status = $8, last_error = NULL, last_batch_at = now(), locked_at = NULL, lock_token = NULL WHERE id = $1`,
     [id, have, summary.duplicates, summary.rejected, summary.needs_verification, summary.verified, emptyAttempts, newStatus],
   );
+  // coverage: remember how this niche/city pair performed so the next batch moves on when it is covered
+  const coverage = { ...(list.coverage || {}) };
+  const ck = coverageKey(niche, city);
+  const prev = coverage[ck] || { attempts: 0, saved: 0, received: 0 };
+  const cov = { attempts: prev.attempts + 1, saved: prev.saved + summary.saved, received: prev.received + summary.received, last_at: new Date().toISOString() };
+  cov.exhausted = cov.saved === 0 ? cov.attempts >= COVERAGE_EXHAUSTED_ATTEMPTS : (summary.saved === 0 && summary.received <= summary.duplicates ? cov.attempts >= COVERAGE_EXHAUSTED_ATTEMPTS + 1 : false);
+  coverage[ck] = cov;
+  await db.query('UPDATE contact_lists SET coverage = $2 WHERE id = $1', [job.list_id, JSON.stringify(coverage)]);
+  summary.coverage = { niche: niche ? niche.name : null, city, attempts: cov.attempts, exhausted: cov.exhausted };
   await syncListProgress(job.list_id);
   await activity.log('generation_batch', { userId: user.id, listId: job.list_id, details: { ...summary, errors: undefined, status: newStatus, usage: generated.usage, report_excerpt: generated.report ? String(generated.report).slice(0, 4000) : undefined } });
   if (newStatus === 'exhausted') await activity.log('generation_exhausted', { userId: user.id, listId: job.list_id, details: { have, requested: job.requested_count } });
@@ -372,4 +431,4 @@ async function continuePending({ timeBudgetMs = config.generation.timeBudgetMs, 
   return results;
 }
 
-module.exports = { runBatch, cancel, status, getJob, jobView, prepareCandidate, computeDataStatus, continuePending, syncListProgress };
+module.exports = { runBatch, cancel, status, getJob, jobView, prepareCandidate, computeDataStatus, continuePending, syncListProgress, chooseTarget, coverageKey };

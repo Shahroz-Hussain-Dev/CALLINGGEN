@@ -104,6 +104,7 @@ async function system(body, s) {
   const sy = s.system;
   const wk = sy.web_search_keys || {};
   const lc = sy.lead_criteria || {};
+  const ls = sy.lead_scoring || {};
   body.innerHTML = html`<div class="card" style="max-width:760px"><div class="card-head"><h2>System configuration</h2></div><form id="sysForm" class="form-grid">
     <label class="field"><span>Rotation interval (days)</span><input type="number" name="rotation_interval_days" min="1" max="30" value="${sy.rotation_interval_days}"></label>
     <label class="field"><span>Max rotations per list</span><input type="number" name="list_max_rotations" min="1" max="10" value="${sy.list_max_rotations}"></label>
@@ -114,12 +115,21 @@ async function system(body, s) {
     <label class="field span-2"><span>Target cities (comma separated; generation rotates through them)</span><textarea name="target_cities">${(sy.target_cities || []).join(', ')}</textarea></label>
     <div class="span-2"><h3 class="mt-2">Lead targeting (applies to every new list)</h3><p class="small muted">Written into the research instructions and enforced on every candidate: a business is dropped when a source shows it started before the year, has more people than allowed, or is an established account. Quotes proving a business is new, small or female-led are kept as "startup signals".</p></div>
     <label class="field"><span>Business stage</span><select name="lc_stage"><option value="any" ${lc.stage !== 'startup' ? 'selected' : ''}>Any</option><option value="startup" ${lc.stage === 'startup' ? 'selected' : ''}>Startups / recently started only</option></select></label>
+    <label class="field"><span>Opened within the last … days (blank = any; 30 = only businesses that opened this month, opening evidence required)</span><input type="number" name="lc_max_age_days" min="1" max="3650" value="${lc.max_age_days || ''}"></label>
     <label class="field"><span>Started in year … or later (blank = any)</span><input type="number" name="lc_founded_from_year" min="1990" max="2100" value="${lc.founded_from_year || ''}"></label>
     <label class="field"><span>Maximum employees (blank = any)</span><input type="number" name="lc_max_employees" min="1" max="100000" value="${lc.max_employees || ''}"></label>
     <label class="field"><span>Leadership</span><select name="lc_leadership"><option value="any" ${lc.leadership !== 'female_preferred' ? 'selected' : ''}>Any</option><option value="female_preferred" ${lc.leadership === 'female_preferred' ? 'selected' : ''}>Female-led preferred (male-led acceptable)</option></select></label>
     <label class="field"><span>Treat accounts above … followers as established (blank = default)</span><input type="number" name="lc_max_followers" min="100" max="100000000" value="${lc.max_followers || ''}"></label>
     <label class="field"><span>Extra targeting note (optional)</span><input type="text" name="lc_notes" maxlength="400" value="${lc.notes || ''}" placeholder="e.g. prefer home-based studios"></label>
     <div class="col span-2"><label class="check"><input type="checkbox" name="rotation_enabled" ${sy.rotation_enabled ? 'checked' : ''}> Automatic rotation enabled</label><label class="check"><input type="checkbox" name="auto_generate_after_rotation" ${sy.auto_generate_after_rotation ? 'checked' : ''}> Generate new lists automatically after rotation</label></div>
+    <div class="span-2"><h3 class="mt-2">Niche priority and automatic switching (Strategy panel)</h3><p class="small muted">Best niches first, one per line. Generation works the top niche across every target city; when a niche is covered everywhere (no new businesses found twice in each city) it moves to the next one automatically.</p></div>
+    <label class="field span-2"><span>Niche priority (one niche name per line, best first)</span><textarea name="niche_priority" rows="6">${(sy.niche_priority || []).join('\n')}</textarea></label>
+    <div class="col span-2"><label class="check"><input type="checkbox" name="auto_switch_niche" ${sy.auto_switch_niche !== false ? 'checked' : ''}> Switch to the next best niche automatically when the selected ones are covered nationwide</label></div>
+    <div class="span-2"><h3 class="mt-2">Sell-probability scoring (Strategy panel)</h3><p class="small muted">Each signal adds or removes points; the total becomes a probability of selling. Leads under the minimum are dropped during generation and the rest are ordered best first.</p></div>
+    <div class="col span-2"><label class="check"><input type="checkbox" name="ls_enabled" ${ls.enabled !== false ? 'checked' : ''}> Scoring enabled</label></div>
+    <label class="field"><span>Minimum sell probability to keep a lead (%)</span><input type="number" name="ls_min_probability" min="0" max="100" value="${ls.min_probability ?? 40}"></label>
+    <label class="field"><span>Points for a 50 % chance (pivot)</span><input type="number" step="0.1" name="ls_pivot" min="-20" max="20" value="${ls.pivot ?? 3}"></label>
+    <div class="span-2 table-wrap"><table class="small"><thead><tr><th>Signal</th><th style="width:110px">Points</th></tr></thead><tbody>${join(Object.entries(ls.weights || {}), ([k, w]) => html`<tr><td>${(ls.labels || {})[k] || k.replace(/_/g, ' ')}</td><td><input type="number" step="0.1" min="-10" max="10" name="lsw_${k}" value="${w}"></td></tr>`)}</tbody></table></div>
     <div class="span-2"><button class="btn primary" type="submit">Save system configuration</button></div></form></div>
     <div class="card mt-3" style="max-width:760px"><div class="card-head"><h2>Web research API keys (free tiers)</h2></div>
       <p class="small muted">Lead research reads real web pages. It works out of the box with no key: search result pages are rendered through the key-less Jina Reader proxy when DuckDuckGo and Bing block this network. Optional upgrades (stored encrypted, used immediately, tried before the free engines): <a href="https://serper.dev" target="_blank" rel="noopener">Serper</a> (Google results, 2,500 free searches, no card), <a href="https://jina.ai" target="_blank" rel="noopener">Jina</a> (free key, raises the proxy rate limit), <a href="https://tavily.com" target="_blank" rel="noopener">Tavily</a> (1,000 free/month), <a href="https://programmablesearchengine.google.com" target="_blank" rel="noopener">Google Programmable Search</a> (100/day), <a href="https://brave.com/search/api/" target="_blank" rel="noopener">Brave</a>.</p>
@@ -129,8 +139,12 @@ async function system(body, s) {
     e.preventDefault();
     const v = formValues(e.target);
     v.target_cities = v.target_cities.split(',').map((x) => x.trim()).filter(Boolean);
-    v.lead_criteria = { stage: v.lc_stage, founded_from_year: v.lc_founded_from_year || null, max_employees: v.lc_max_employees || null, leadership: v.lc_leadership, max_followers: v.lc_max_followers || null, notes: v.lc_notes || '' };
-    for (const k of Object.keys(v)) if (k.startsWith('lc_')) delete v[k];
+    v.lead_criteria = { stage: v.lc_stage, founded_from_year: v.lc_founded_from_year || null, max_employees: v.lc_max_employees || null, leadership: v.lc_leadership, max_followers: v.lc_max_followers || null, max_age_days: v.lc_max_age_days || null, notes: v.lc_notes || '' };
+    const weights = {}; for (const k of Object.keys(v)) if (k.startsWith('lsw_')) weights[k.slice(4)] = Number(v[k]);
+    v.lead_scoring = { enabled: !!v.ls_enabled, min_probability: Number(v.ls_min_probability), pivot: Number(v.ls_pivot), weights };
+    v.niche_priority = String(v.niche_priority || '').split('\n').map((x) => x.trim()).filter(Boolean);
+    v.auto_switch_niche = !!v.auto_switch_niche;
+    for (const k of Object.keys(v)) if (k.startsWith('lc_') || k.startsWith('ls_') || k.startsWith('lsw_')) delete v[k];
     try { await api.patch('/api/settings/system', v); toast('System configuration saved', 'success'); } catch (er) { toast(er.message, 'error'); }
   });
   body.querySelector('#keysForm').addEventListener('submit', async (e) => { e.preventDefault(); const v = formValues(e.target); const payload = {}; for (const [k, val] of Object.entries(v)) { if (!val) continue; payload[k] = val.trim().toUpperCase() === 'CLEAR' ? '' : val.trim(); } if (!Object.keys(payload).length) { toast('Nothing to save', 'warning'); return; } try { await api.patch('/api/settings/system', { web_search_keys: payload }); toast('Keys saved (encrypted)', 'success'); location.hash = '#/settings/system'; renderSettings(document.getElementById('view'), 'system'); } catch (er) { toast(er.message, 'error', 7000); } });

@@ -8,7 +8,7 @@ const { ValidationError } = require('./errors');
 
 const STAGES = ['any', 'startup'];
 const LEADERSHIP = ['any', 'female_preferred'];
-const EMPTY = Object.freeze({ stage: 'any', founded_from_year: null, max_employees: null, leadership: 'any', max_followers: null, notes: '' });
+const EMPTY = Object.freeze({ stage: 'any', founded_from_year: null, max_employees: null, leadership: 'any', max_followers: null, max_age_days: null, notes: '' });
 
 function intOrNull(v, field, min, max) {
   if (v === null || v === undefined || v === '') return null;
@@ -32,19 +32,21 @@ function normalize(input) {
     max_employees: intOrNull(input.max_employees, 'max_employees', 1, 100000),
     leadership,
     max_followers: intOrNull(input.max_followers, 'max_followers', 100, 100000000),
+    max_age_days: intOrNull(input.max_age_days, 'max_age_days', 1, 3650),
     notes,
   };
 }
 
 function isActive(c) {
   const n = c && typeof c === 'object' ? c : EMPTY;
-  return n.stage === 'startup' || !!n.founded_from_year || !!n.max_employees || n.leadership === 'female_preferred' || !!n.max_followers || !!(n.notes && n.notes.trim());
+  return n.stage === 'startup' || !!n.founded_from_year || !!n.max_employees || n.leadership === 'female_preferred' || !!n.max_followers || !!n.max_age_days || !!(n.notes && n.notes.trim());
 }
 
 /** Plain-English summary shown in the UI and in exports. */
 function describe(c) {
   const n = c && typeof c === 'object' ? c : EMPTY;
   const parts = [];
+  if (n.max_age_days) parts.push(`opened within the last ${n.max_age_days} days`);
   if (n.stage === 'startup') parts.push('startups / recently started businesses');
   if (n.founded_from_year) parts.push(`started in ${n.founded_from_year} or later`);
   if (n.max_employees) parts.push(`at most ${n.max_employees} employees`);
@@ -59,6 +61,10 @@ function promptText(c) {
   const n = c && typeof c === 'object' ? c : EMPTY;
   if (!isActive(n)) return '';
   const lines = ['TARGETING (these rules override the size guidance in the target profile):'];
+  if (n.max_age_days) {
+    const since = new Date(Date.now() - n.max_age_days * 86400000).toISOString().slice(0, 10);
+    lines.push(`- MOST IMPORTANT: only businesses that OPENED within the last ${n.max_age_days} days (on or after ${since}). Acceptable evidence: an opening announcement ("now open", "grand opening", "newly opened", "opening soon", "just launched", "new clinic/salon/studio", "our first ...") or a stated opening date, on a page or post from that period. Copy the announcement verbatim into opening_quote and put the date into opened_on (YYYY-MM-DD or YYYY-MM when only the month is known; null when no date is stated). A business with no opening evidence must NOT be returned, however good it looks otherwise.`);
+  }
   if (n.stage === 'startup') {
     lines.push('- Only STARTUPS / recently started, small businesses. Evidence of newness: "new", "newly opened", "grand opening", "opening soon", "just launched", "now open", a founding or "since" year, few posts, a small following, first reviews. EXCLUDE established brands, chains, franchises, businesses with several branches, and any business that looks long-established.');
     lines.push('- A founder-run small business with no sign of being established (single location, small following, founder named as the contact, few reviews) DOES qualify even when its start year is not published: include it with founded_year null and quote the smallness signals in startup_signals. Do not return an empty list when such businesses are in the evidence.');
@@ -73,12 +79,18 @@ function promptText(c) {
 }
 
 /**
- * Server-side enforcement on one candidate. `facts` may carry evidence-derived numbers
- * ({ followers, posts }). Returns { ok, reason, match } where match is 'confirmed' | 'unknown'.
+ * Server-side enforcement on one candidate. `facts` may carry evidence-derived data
+ * ({ followers, posts, opening: { quote, dated_within, recent_page } }). Returns { ok, reason, match }
+ * where match is 'confirmed' | 'likely' | 'unknown'.
  */
 function check(lead, c, facts = {}) {
   const n = c && typeof c === 'object' ? c : EMPTY;
   if (!isActive(n)) return { ok: true, match: null };
+  if (n.max_age_days) {
+    const o = facts.opening || lead.opening || null;
+    if (!o || !o.quote) return { ok: false, reason: 'fails_criteria_not_new', match: null };
+    if (o.opened_on && o.dated_within === false) return { ok: false, reason: 'fails_criteria_opened_earlier', match: null };
+  }
   const founded = Number.isFinite(Number(lead.founded_year)) && lead.founded_year !== null ? Number(lead.founded_year) : null;
   const team = Number.isFinite(Number(lead.team_size_estimate)) && lead.team_size_estimate !== null ? Number(lead.team_size_estimate) : null;
   const followers = Number.isFinite(Number(facts.followers)) && facts.followers !== null && facts.followers !== undefined ? Number(facts.followers) : null;
@@ -89,6 +101,10 @@ function check(lead, c, facts = {}) {
   const followerCap = n.max_followers || (n.stage === 'startup' ? 20000 : null);
   if (followerCap && followers !== null && followers > followerCap) return { ok: false, reason: 'fails_criteria_established', match: null };
   const signals = Array.isArray(lead.startup_signals) ? lead.startup_signals.filter(Boolean) : [];
+  if (n.max_age_days) {
+    const o = facts.opening || lead.opening;
+    return { ok: true, match: o.dated_within ? 'confirmed' : 'likely' };
+  }
   const confirmed = (n.founded_from_year && founded !== null && founded >= n.founded_from_year) || signals.length > 0 || (followers !== null && followers <= 5000) || (team !== null && n.max_employees && team <= n.max_employees);
   return { ok: true, match: confirmed ? 'confirmed' : 'unknown' };
 }
@@ -99,6 +115,7 @@ function rank(lead, c) {
   let r = 0;
   if (n.leadership === 'female_preferred' && lead.female_led === true) r += 2;
   if (lead.criteria_match === 'confirmed') r += 1;
+  if (lead.criteria_match === 'likely') r += 0.5;
   return r;
 }
 

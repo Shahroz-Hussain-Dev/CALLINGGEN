@@ -111,7 +111,7 @@ test('jina_reader engine answers when direct engines are blocked, and backs off 
     assert.equal(a.length, 2);
     assert.equal(a[1].url, 'https://www.instagram.com/zainabsharifmakeupstudio/');
     assert.ok(hits.some((h) => h.startsWith('https://r.jina.ai/https://lite.duckduckgo.com/lite/')), 'DuckDuckGo Lite was read through Jina Reader');
-    assert.equal(websearch.cache.get('bridal makeup Lahore|5').engine, 'jina_reader');
+    assert.equal(websearch.cache.get('bridal makeup Lahore|5|').engine, 'jina_reader');
     jinaStatus = 429;
     const b = await websearch.search('second query', { count: 5 });
     assert.deepEqual(b, [], 'Jina rate-limited and Bing RSS empty -> no results, no throw');

@@ -105,3 +105,17 @@ Service `panel_fields`: `business_contacted, decision_maker_reached, decision_ma
 | `DELETE` | `/api/leads/:id` | owner | Deletes a generated contact that has never been called and has no follow-ups or meetings (409 otherwise). Audited as `contact_deleted`. |
 
 Saved contacts carry the targeting facts in `business_operations`: `founded_year`, `team_size_estimate`, `female_led`, `startup_signals` (quotes found in the sources), `audience` (Instagram follower and post counts read from search snippets) and `criteria_match` (`confirmed` / `unknown`). A candidate is rejected (`fails_criteria_founded_before`, `fails_criteria_team_size`, `fails_criteria_established`) when a source shows it started before the year, has more people than allowed, or is an established account.
+
+
+## Sell-probability scoring, opened-within window, niche switching, own numbers
+
+| Setting (`PATCH /api/settings/system`, owner) | Purpose |
+|---|---|
+| `lead_criteria.max_age_days` | Only businesses that opened within the last N days. Searches are limited to recently published pages (DuckDuckGo `df=m` / `df=w`), the model must quote the opening announcement, the server re-finds it in the sources (with the date when stated) and rejects candidates without it (`fails_criteria_not_new`, `fails_criteria_opened_earlier`). Applies to both panels. |
+| `lead_scoring` | `{ enabled, panel (strategy / service / both), min_probability, pivot, scale, weights: { no_website: 1, no_facebook: 0.4, ... } }`. Every lead's signals are weighted into points and a logistic sell probability (0-100). Leads under `min_probability` are rejected (`low_sell_probability`); the rest are ordered best first. Stored on the contact as `sell_score` with `business_operations.score_breakdown`. |
+| `niche_priority` | Ordered niche names (best first) for the Strategy panel. Generation works the top niche across every target city before the next one. |
+| `auto_switch_niche` | When every niche on a list is covered in every target city (no new businesses twice per city), the next niche from `niche_priority` is added to the list automatically (`niche_switched` in the audit log). Coverage is kept per list in `contact_lists.coverage`. |
+
+Own numbers: for a lead with a named owner / doctor, the engine looks for a number printed next to that person's name on public pages (the clinic's site, directory profiles, posts), skipping numbers labelled reception / appointments / helpline and preferring mobiles. The result is stored as `business_operations.direct_contact` (`{ person, number, kind, source_url, context }`) and on the person entry (`contact`, `contact_kind`, `contact_source`). Only publicly published pages are read.
+
+Speed: batches use six searches (five date-limited when an opened-within window is set), read pages six at a time with a 5-second timeout, and start with the fastest model. A free Jina API key (Settings -> Web research API keys) lifts the key-less 20-requests-per-minute proxy limit and roughly halves batch time.

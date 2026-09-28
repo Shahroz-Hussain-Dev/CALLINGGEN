@@ -54,6 +54,10 @@ to the browser.
 | `JINA_RATE_LIMIT_COOLDOWN_MS` | Cooldown after a Jina Reader HTTP 429 (default 90000). |
 | `EVIDENCE_JINA_PAGE_FALLBACKS` | Pages per batch re-read through Jina Reader when a site refuses direct fetches (default 3). |
 | `EVIDENCE_PHONE_LOOKUPS` | Follow-up searches per batch for verified leads that still have no phone number; a number is accepted only from a result that names the business (default 5). |
+| `EVIDENCE_DIRECT_LOOKUPS` | Follow-up searches per batch for the owner's / doctor's own number next to their name on public pages (default 3). |
+| `EVIDENCE_PAGE_CONCURRENCY` / `EVIDENCE_PAGE_TIMEOUT_MS` | Pages read in parallel (default 6) and per-page timeout (default 5000). |
+| `EVIDENCE_COOLDOWN_WAIT_MAX_MS` | Longest pause a batch waits for a search-engine cooldown before giving up on that batch (default 45000). |
+| `JINA_KEYED_MIN_GAP_MS` | Spacing between Jina Reader calls when a Jina API key is configured (default 400). |
 | `SERPER_API_KEY` | Serper.dev key (Google results; 2,500 free searches, no card). Also enables Google Places verification. **Recommended.** |
 | `JINA_API_KEY` / `TAVILY_API_KEY` / `BRAVE_SEARCH_API_KEY` | Alternative search APIs with free tiers. |
 | `GOOGLE_CSE_API_KEY` + `GOOGLE_CSE_ID` | Google Programmable Search JSON API (100 free queries/day). |

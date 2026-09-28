@@ -19,10 +19,11 @@ const COLUMNS = [
   { key: 'city', label: 'City', width: 52 },
   { key: 'phone', label: 'Phone / WhatsApp', width: 82 },
   { key: 'social', label: 'Social profile', width: 118 },
-  { key: 'people', label: 'Owner / lead', width: 74 },
-  { key: 'profile', label: 'Startup profile', width: 118 },
-  { key: 'status', label: 'Data', width: 46 },
-  { key: 'source', label: 'Source', width: 84 },
+  { key: 'people', label: 'Owner / doctor (own number)', width: 84 },
+  { key: 'profile', label: 'Startup profile / opening', width: 108 },
+  { key: 'sell', label: 'Sell %', width: 30 },
+  { key: 'status', label: 'Data', width: 40 },
+  { key: 'source', label: 'Source', width: 76 },
 ];
 
 function clean(s, max = 400) {
@@ -35,8 +36,10 @@ function rowFor(c, n) {
   const sp = c.social_profiles || {};
   const socialParts = [];
   for (const k of ['instagram', 'facebook', 'tiktok', 'linkedin']) if (sp[k]) socialParts.push(`${k === 'instagram' ? 'IG' : k === 'facebook' ? 'FB' : k === 'tiktok' ? 'TT' : 'LI'}: ${shortUrl(sp[k])}`);
-  const people = [...((c.management_data || {}).owners || []), ...(c.decision_makers || [])].filter((p) => p && p.name).slice(0, 2).map((p) => `${p.name}${p.designation ? ` (${p.designation})` : ''}`);
+  const people = [...((c.management_data || {}).owners || []), ...(c.decision_makers || [])].filter((p) => p && p.name).slice(0, 2).map((p) => `${p.name}${p.designation ? ` (${p.designation})` : ''}${p.contact ? ` · ${p.contact}${p.contact_kind === 'direct_mobile' ? ' (own)' : ''}` : ''}`);
+  if (ops.direct_contact && ops.direct_contact.number && !people.some((x) => x.includes(ops.direct_contact.number))) people.unshift(`${ops.direct_contact.person}: ${ops.direct_contact.number} (own)`);
   const profile = [];
+  if (ops.opening && ops.opening.quote) profile.push(`Opened${ops.opening.opened_on ? ' ' + ops.opening.opened_on : ''}: "${clean(ops.opening.quote, 90)}"`);
   if (ops.female_led === true) profile.push('Female-led');
   else if (ops.female_led === false) profile.push('Male-led');
   if (ops.founded_year) profile.push(`Started ${ops.founded_year}`);
@@ -54,6 +57,7 @@ function rowFor(c, n) {
     social: socialParts.join('\n') || '—',
     people: people.map((p) => clean(p, 60)).join('\n') || '—',
     profile: profile.join(' · ') || '—',
+    sell: c.sell_score !== null && c.sell_score !== undefined ? `${Math.round(Number(c.sell_score))}%` : '—',
     status: ({ verified: 'Verified', partially_verified: 'Partial', estimated: 'Estimated', needs_verification: 'Check' })[c.data_status] || clean(c.data_status, 20),
     source: (c.source_urls || []).slice(0, 2).map(shortUrl).join('\n') || '—',
   };
@@ -94,7 +98,7 @@ async function listsPdf(user, { ids, title }) {
     doc.moveDown(0.2);
   }
   doc.moveDown(0.6);
-  doc.font('Helvetica').fontSize(9).fillColor('#444').text('Every phone number, social profile, person name and quote in this document was copied from a public web source recorded under "Source". Founding year, team size and leadership are read from those sources and marked where they are estimates. "Data" shows the verification level: Verified (name + phone confirmed on sources), Partial, Estimated, or Check (needs verification before use).', { width: doc.page.width - PAGE.margin * 2 });
+  doc.font('Helvetica').fontSize(9).fillColor('#444').text('Every phone number, social profile, person name and quote in this document was copied from a public web source recorded under "Source". "(own)" marks a number printed next to the owner\'s or doctor\'s name on a public page rather than a reception line. Founding year, opening evidence, team size and leadership are read from those sources and marked where they are estimates. "Sell %" is the weighted sell-probability score (Strategy panel). "Data" shows the verification level: Verified (name + phone confirmed on sources), Partial, Estimated, or Check (needs verification before use).', { width: doc.page.width - PAGE.margin * 2 });
   doc.fillColor('#000');
 
   for (const s of selected) {

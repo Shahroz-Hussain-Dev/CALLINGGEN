@@ -61,10 +61,10 @@ const config = {
       thinking: env.GEMINI_THINKING || 'high', // high | medium | low | off  (Gemini 3 thinkingLevel; older models use a dynamic budget)
       temperature: Number.isFinite(parseFloat(env.GEMINI_TEMPERATURE)) ? parseFloat(env.GEMINI_TEMPERATURE) : 0.2,
       timeoutMs: int(env.GEMINI_TIMEOUT_MS, 170000),
-      maxRetries: int(env.GEMINI_MAX_RETRIES, 2),
+      maxRetries: int(env.GEMINI_MAX_RETRIES, 1),
       overloadCooldownMs: int(env.GEMINI_OVERLOAD_COOLDOWN_MS, 120 * 1000),
       overloadRounds: int(env.GEMINI_OVERLOAD_ROUNDS, 2), // extra passes over the model chain when every model is overloaded
-      overloadRoundWaitMs: int(env.GEMINI_OVERLOAD_ROUND_WAIT_MS, 12000),
+      overloadRoundWaitMs: int(env.GEMINI_OVERLOAD_ROUND_WAIT_MS, 6000),
       batchDeadlineMs: int(env.GEMINI_BATCH_DEADLINE_MS, 240000), // one lead batch (research + model) must finish within this; keep under the function maxDuration
       evidenceTimeoutMs: int(env.GEMINI_EVIDENCE_TIMEOUT_MS, 120000),
       evidenceThinking: env.GEMINI_EVIDENCE_THINKING || 'medium', // thinking level for evidence-mode extraction
@@ -96,18 +96,22 @@ const config = {
     minGapMs: int(env.WEB_SEARCH_MIN_GAP_MS, 400),
     bingGapMs: int(env.BING_MIN_GAP_MS, 5000),
     jinaGapMs: int(env.JINA_MIN_GAP_MS, 3200), // key-less Jina Reader: 20 requests/minute per IP
+    jinaKeyedGapMs: int(env.JINA_KEYED_MIN_GAP_MS, 400), // with a (free) Jina API key the limit is far higher
     jinaRateLimitCooldownMs: int(env.JINA_RATE_LIMIT_COOLDOWN_MS, 90000),
     timeoutMs: int(env.WEB_SEARCH_TIMEOUT_MS, 15000),
   },
   evidence: {
     timeBudgetMs: int(env.EVIDENCE_TIME_BUDGET_MS, 45000),
     maxPages: int(env.EVIDENCE_MAX_PAGES, 8),
-    pageTimeoutMs: int(env.EVIDENCE_PAGE_TIMEOUT_MS, 8000),
+    pageTimeoutMs: int(env.EVIDENCE_PAGE_TIMEOUT_MS, 5000),
+    pageConcurrency: int(env.EVIDENCE_PAGE_CONCURRENCY, 6),
     maxPageBytes: int(env.EVIDENCE_MAX_PAGE_BYTES, 400000),
     maxPageChars: int(env.EVIDENCE_MAX_PAGE_CHARS, 4500),
     maxPromptChars: int(env.EVIDENCE_MAX_PROMPT_CHARS, 36000),
     jinaPageFallbacks: int(env.EVIDENCE_JINA_PAGE_FALLBACKS, 3), // pages re-read through Jina Reader when a site blocks direct fetches
-    phoneLookups: int(env.EVIDENCE_PHONE_LOOKUPS, 8), // follow-up searches per batch for leads that still lack a phone number
+    phoneLookups: int(env.EVIDENCE_PHONE_LOOKUPS, 5), // follow-up searches per batch for leads that still lack a phone number
+    directLookups: int(env.EVIDENCE_DIRECT_LOOKUPS, 3), // follow-up searches per batch for the owner's / doctor's own number
+    cooldownWaitMaxMs: int(env.EVIDENCE_COOLDOWN_WAIT_MAX_MS, 45000),
   },
 
   search: {

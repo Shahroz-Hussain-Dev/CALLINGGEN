@@ -8,7 +8,7 @@ const evidence = require('../server/services/evidence.service');
 const prompts = require('../server/prompts/leadGeneration');
 require('../server/services/settings.service').getWebSearchKeys = async () => ({});
 
-const STARTUP = { stage: 'startup', founded_from_year: 2026, max_employees: 10, leadership: 'female_preferred', max_followers: null, notes: '' };
+const STARTUP = { stage: 'startup', founded_from_year: 2026, max_employees: 10, leadership: 'female_preferred', max_followers: null, max_age_days: null, notes: '' };
 
 test('criteria are validated, described and written into the prompt', () => {
   const n = criteria.normalize({ stage: 'startup', founded_from_year: '2026', max_employees: '10', leadership: 'female_preferred' });
@@ -43,8 +43,9 @@ test('evidence queries gain newcomer searches under startup criteria; audience c
   const targeted = evidence.buildQueries({ panel: 'strategy', niche: 'Nail Art Studios', city: 'Karachi', criteria: STARTUP });
   assert.equal(plain.length, 6);
   assert.ok(targeted.length >= 8);
-  assert.ok(targeted.some((q) => /newly opened/.test(q)));
-  assert.ok(targeted.some((q) => /new Nail Art Studios Karachi 2026/.test(q)));
+  assert.ok(targeted.some((x) => /newly opened/.test(x.q)));
+  assert.ok(targeted.some((x) => /new Nail Art Studios Karachi 2026/.test(x.q)));
+  assert.ok(targeted.every((x) => x.recency === null), 'no recency limit without an opened-within window');
   const ev = { results: [{ title: 'Nail Nook (@nailnook.khi) - Instagram', snippet: '1,204 Followers, 310 Following, 88 Posts - Nail Nook Karachi. New nail studio in DHA, opened 2026. Bookings 0312-1234567', url: 'https://www.instagram.com/nailnook.khi/' }], pages: [] };
   const a = evidence.audienceFor({ business_name: 'Nail Nook', social_profiles: { instagram: 'https://instagram.com/nailnook.khi' } }, ev);
   assert.deepEqual(a, { instagram_followers: 1204, instagram_posts: 88, source_url: 'https://www.instagram.com/nailnook.khi/' });

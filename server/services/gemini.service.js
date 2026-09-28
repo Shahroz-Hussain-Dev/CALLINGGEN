@@ -18,6 +18,7 @@ const prompts = require('../prompts/leadGeneration');
 const analysis = require('../prompts/analysis');
 const evidence = require('./evidence.service');
 const criteriaLib = require('../lib/criteria');
+const scoringLib = require('../lib/scoring');
 
 let fetchImpl = (...args) => fetch(...args);
 function setFetchForTests(fn) { fetchImpl = fn || ((...args) => fetch(...args)); }
@@ -356,7 +357,7 @@ function useEvidenceMode(webSearch) {
 }
 
 /** Lead generation from server-gathered evidence: one JSON call per batch. */
-async function generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage, criteria = null }) {
+async function generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage, criteria = null, nichePriority = [], scoring = null }) {
   const niche = niches[0];
   const ev = await evidence.gather({ panel, niche, city, criteria, timeBudgetMs: Math.max(15000, Math.min(config.evidence.timeBudgetMs, client.remainingMs() - 90000)) });
   if (!ev.results.length) throw new AppError('Web research returned no results for this niche and city (the free search engines may be rate-limited right now). The batch will be retried.', 503, 'ai_unavailable');
@@ -416,12 +417,41 @@ Return the JSON now (search_notes: say how many distinct qualifying businesses t
     if (v.changes.length) notes.push(`${v.lead.business_name}: ${v.changes.join('; ')}`);
     leads.push(v.lead);
   }
-  usage.web_search_requests += lookups;
-  leads.sort((a, b) => ((b.phone || b.whatsapp ? 4 : 0) + criteriaLib.rank(b, criteria)) - ((a.phone || a.whatsapp ? 4 : 0) + criteriaLib.rank(a, criteria)));
+  // Owner's / doctor's own number: numbers printed next to a named person on public pages (reception lines skipped).
+  let directLookups = 0;
+  for (const lead of leads) {
+    const person = [...(lead.owners || []), ...(lead.decision_makers || []), ...(lead.management || [])].find((p) => p && p.name);
+    if (!person || directLookups >= config.evidence.directLookups || client.remainingMs() < 35000) continue;
+    directLookups++;
+    try {
+      const found = await evidence.findDirectNumber({ personName: person.name, businessName: lead.business_name, city: lead.city || city, ev, businessPhone: lead.phone });
+      if (!found) continue;
+      lead.direct_contact = { person: person.name, designation: person.designation || null, number: found.number, kind: found.kind, source_url: found.source_url, context: found.context };
+      person.contact = found.number; person.contact_kind = found.kind; person.contact_source = found.source_url;
+      if (found.source_url && !(lead.source_urls || []).includes(found.source_url)) lead.source_urls = [...(lead.source_urls || []), found.source_url];
+      if (!lead.phone) { lead.phone = found.number; lead.field_verification = { ...(lead.field_verification || {}), phone: 'verified' }; }
+      notes.push(`${lead.business_name}: ${person.name}'s own number ${found.number} found (${found.source_url})`);
+    } catch (err) { logger.warn('Direct number lookup failed', { name: lead.business_name, error: err.message }); }
+  }
+  usage.web_search_requests += lookups + directLookups;
+  // Sell-probability scoring (Strategy panel by default): weighted signals -> probability; weak leads are dropped.
+  if (scoring && scoringLib.appliesTo(scoring, panel)) {
+    const priority = (nichePriority || []).map((n) => String(n).toLowerCase());
+    for (let i = leads.length - 1; i >= 0; i--) {
+      const lead = leads[i];
+      const rank = priority.indexOf(String(lead.niche || niches[0] || '').toLowerCase());
+      const s = scoringLib.scoreLead(lead, { nicheRank: rank >= 0 ? rank + 1 : null, nicheName: lead.niche || niches[0], femalePreferred: !!(criteria && criteria.leadership === 'female_preferred') }, scoring);
+      lead.sell_probability = s.probability; lead.score_points = s.points; lead.score_breakdown = s.breakdown.slice(0, 12);
+      if (s.probability < scoring.min_probability) { rejected.push({ business_name: lead.business_name, reason: 'low_sell_probability', details: { probability: s.probability } }); leads.splice(i, 1); }
+    }
+    leads.sort((a, b) => (b.sell_probability || 0) - (a.sell_probability || 0));
+  } else {
+    leads.sort((a, b) => ((b.phone || b.whatsapp ? 4 : 0) + criteriaLib.rank(b, criteria)) - ((a.phone || a.whatsapp ? 4 : 0) + criteriaLib.rank(a, criteria)));
+  }
   return { leads, rejected, model, ev, notes, searchNotes: String(data.search_notes || '') };
 }
 
-async function generateLeadCandidates({ userId, panel, niches, city, count, excludeNames = [], webSearch = config.ai.gemini.webSearch, timeBudgetMs = config.ai.gemini.batchDeadlineMs, criteria = null }) {
+async function generateLeadCandidates({ userId, panel, niches, city, count, excludeNames = [], webSearch = config.ai.gemini.webSearch, timeBudgetMs = config.ai.gemini.batchDeadlineMs, criteria = null, nichePriority = [], scoring = null }) {
   const { client, source } = await getClientForUser(userId);
   client.setDeadline(timeBudgetMs);
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, web_search_requests: 0 };
@@ -430,7 +460,7 @@ async function generateLeadCandidates({ userId, panel, niches, city, count, excl
   try {
     // ---- Evidence mode (free): our own web searches + page reading, one model call ----
     if (useEvidenceMode(webSearch)) {
-      const r = await generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage, criteria });
+      const r = await generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage, criteria, nichePriority, scoring });
       for (const u of r.ev.urls) sources.add(u);
       const notes = [`${r.searchNotes}`.slice(0, 1200), `Evidence: ${r.ev.queries.length} searches, ${r.ev.results.length} results, ${r.ev.pages.length} pages read, ${r.ev.phones.size} phone numbers found.`, ...(r.notes.length ? ['Verification: ' + r.notes.join(' | ').slice(0, 800)] : [])];
       return { leads: r.leads, rejected: r.rejected, searchNotes: notes.filter(Boolean).join('\n'), sources: [...sources], usage, model: r.model, webSearchUsed: true, researchMode: 'evidence', warnings: [], keySource: source, report: evidence.render(r.ev, { maxChars: 6000 }) };
@@ -459,7 +489,7 @@ Finish with "END OF REPORT".`;
     });
     if (warnings.includes('grounding_unavailable') && config.ai.gemini.researchMode === 'auto') {
       // Grounding was refused mid-way: redo this batch in evidence mode rather than trusting memory.
-      const r = await generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage, criteria });
+      const r = await generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage, criteria, nichePriority, scoring });
       for (const u of r.ev.urls) sources.add(u);
       const notes = [`${r.searchNotes}`.slice(0, 1200), `Evidence: ${r.ev.queries.length} searches, ${r.ev.results.length} results, ${r.ev.pages.length} pages read, ${r.ev.phones.size} phone numbers found.`, ...(r.notes.length ? ['Verification: ' + r.notes.join(' | ').slice(0, 800)] : [])];
       return { leads: r.leads, rejected: r.rejected, searchNotes: notes.filter(Boolean).join('\n'), sources: [...sources], usage, model: r.model, webSearchUsed: true, researchMode: 'evidence', warnings: [], keySource: source, report: evidence.render(r.ev, { maxChars: 6000 }) };
