@@ -9,7 +9,7 @@
   "functions": {
     "api/index.js": {
       "maxDuration": 300,
-      "includeFiles": "node_modules/pdfkit/js/data/**"
+      "includeFiles": "node_modules/pdfkit/js/**"
     }
   },
   "crons": [
