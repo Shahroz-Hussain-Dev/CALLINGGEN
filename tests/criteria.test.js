@@ -79,3 +79,13 @@ test('a founding year must be stated in the sources; landline area codes locate 
   assert.equal(evidence.verifyLead(lead, mk('aura studio est. 2026 call 0300-1234567')).lead.founded_year, 2026);
   assert.equal(evidence.verifyLead(lead, mk('aura studio opened its doors in 2026 call 0300-1234567')).lead.founded_year, 2026);
 });
+
+test('generic category names are not accepted as businesses', () => {
+  const norm = require('../server/lib/normalize');
+  assert.equal(norm.isGenericName('Social Media Services Provider'), true);
+  assert.equal(norm.isGenericName('Best Bridal Makeup Studio Karachi'), true);
+  assert.equal(norm.isGenericName('Utilizor'), false);
+  assert.equal(norm.isGenericName('ZAKZ Marketing Agency'), false);
+  assert.equal(norm.isGenericName("Sarah's Makeup Studio"), false);
+  assert.equal(norm.isGenericName('Social Media Services - SMS'), true);
+});

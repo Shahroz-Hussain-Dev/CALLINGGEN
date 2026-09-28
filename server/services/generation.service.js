@@ -44,6 +44,7 @@ function prepareCandidate(raw, { panel, nicheRows, city, criteria = null }) {
   if (businessName.length < 2) return { ok: false, reason: 'missing_business_name' };
   const normalizedName = norm.normalizeBusinessName(businessName);
   if (!normalizedName) return { ok: false, reason: 'missing_business_name' };
+  if (norm.isGenericName(businessName)) return { ok: false, reason: 'generic_business_name' }; // "Social Media Services Provider" is a category, not a business
 
   const social = {};
   const handles = {};

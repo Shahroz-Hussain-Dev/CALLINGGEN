@@ -210,6 +210,14 @@ function cityFromPhone(phone) {
   return null;
 }
 
+/** True when a "business name" is only generic category words (e.g. "Social Media Services Provider"), i.e. not a real trading name. */
+const GENERIC_NAME_WORDS = new Set(['social', 'media', 'services', 'service', 'provider', 'providers', 'marketing', 'agency', 'agencies', 'company', 'companies', 'digital', 'solutions', 'solution', 'studio', 'studios', 'salon', 'salons', 'beauty', 'parlour', 'parlor', 'makeup', 'bridal', 'nail', 'nails', 'art', 'artist', 'artists', 'hair', 'skin', 'care', 'clinic', 'clinics', 'management', 'managment', 'online', 'business', 'businesses', 'best', 'top', 'professional', 'expert', 'experts', 'the', 'and', 'of', 'in', 'for', 'pakistan', 'karachi', 'lahore', 'islamabad', 'rawalpindi', 'faisalabad', 'multan', 'peshawar', 'gujranwala', 'sialkot', 'hyderabad', 'bahawalpur', 'abbottabad', 'sms', 'smm', 'seo', 'ads', 'advertising', 'content', 'writing', 'copywriting', 'writer', 'writers', 'tuition', 'academy', 'tutors', 'tutor', 'home', 'ecommerce', 'influencer', 'influencers', 'youtube', 'channel', 'brand', 'branding', 'freelancer', 'freelancers', 'page', 'official', 'ltd', 'pvt', 'private', 'limited', 'group', 'team', 'shop', 'store', 'center', 'centre']);
+function isGenericName(name) {
+  const tokens = nameTokens(normalizeBusinessName(name) || '').filter((t) => t.length >= 2);
+  if (!tokens.length) return true;
+  return tokens.every((t) => GENERIC_NAME_WORDS.has(t) || /^\d+$/.test(t));
+}
+
 function normalizeEmail(email) {
   if (!email) return null;
   const s = String(email).trim().toLowerCase();
@@ -218,5 +226,5 @@ function normalizeEmail(email) {
 
 module.exports = {
   normalizeBusinessName, nameSimilarity, nameTokens, levenshtein, normalizePhone, formatPhoneForDisplay,
-  normalizeDomain, isSocialDomain, classifyUrl, normalizeHandle, normalizeCity, normalizeEmail, cityFromPhone, DEFAULT_CITIES,
+  normalizeDomain, isSocialDomain, classifyUrl, normalizeHandle, normalizeCity, normalizeEmail, cityFromPhone, isGenericName, DEFAULT_CITIES,
 };
