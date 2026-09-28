@@ -88,4 +88,8 @@ test('generic category names are not accepted as businesses', () => {
   assert.equal(norm.isGenericName('ZAKZ Marketing Agency'), false);
   assert.equal(norm.isGenericName("Sarah's Makeup Studio"), false);
   assert.equal(norm.isGenericName('Social Media Services - SMS'), true);
+  assert.equal(norm.isGenericName('N&R Nails & Beauty Studio'), false, 'initials make a name distinctive');
+  assert.equal(norm.isGenericName('M. Beauty Salon'), false);
+  assert.equal(norm.isGenericName('SB Sehrish beauty salon'), false);
+  assert.equal(norm.isGenericName('Online Tutor | Multan'), true);
 });
