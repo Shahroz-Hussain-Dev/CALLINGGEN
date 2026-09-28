@@ -100,7 +100,7 @@ Service `panel_fields`: `business_contacted, decision_maker_reached, decision_ma
 | Method | Path | Who | Purpose |
 |---|---|---|---|
 | `PATCH` | `/api/settings/system` | owner | `lead_criteria` object: `stage` (`any` / `startup`), `founded_from_year`, `max_employees`, `leadership` (`any` / `female_preferred`), `max_followers`, `notes`. Written into every research prompt and enforced on every candidate; snapshotted on each list at creation (`contact_lists.criteria`). |
-| `POST` | `/api/leads/generate` | any | Accepts an optional `criteria` object (owner only) to override the global targeting for that list. |
+| `POST` | `/api/leads/generate` | any | Accepts an optional `criteria` object (owner only) to override the global targeting for that list, and `for_user_id` (owner only) to create or extend another user's list for the current cycle. |
 | `GET` | `/api/export/lists.pdf?ids=<id>,<id>&title=…` | owner, or the current owner of every listed list | PDF export of up to six lists in one document (landscape table: business, niche, city, phone / WhatsApp, social profile, owner, startup profile, data status, sources). `download=0` opens inline. |
 | `DELETE` | `/api/leads/:id` | owner | Deletes a generated contact that has never been called and has no follow-ups or meetings (409 otherwise). Audited as `contact_deleted`. |
 
