@@ -107,3 +107,22 @@ test('the owner can store web research API keys encrypted; they are masked in re
   const status = await h.request('GET', '/api/ai/status', { cookie: shahroz.cookie });
   assert.deepEqual(status.body.web_research.engines.slice(0, 1), ['serper']);
 });
+
+test('the owner can reset all business data with the confirmation phrase; employees cannot', async () => {
+  const { amman, shahroz } = await h.loginAll();
+  await h.createListWithContacts(amman.user, 'strategy', 3, 'Wipe');
+  const denied = await h.request('POST', '/api/admin/reset-data', { cookie: amman.cookie, body: { confirm: 'DELETE ALL DATA' } });
+  assert.equal(denied.status, 403);
+  const noPhrase = await h.request('POST', '/api/admin/reset-data', { cookie: shahroz.cookie, body: { confirm: 'yes' } });
+  assert.equal(noPhrase.status, 400);
+  const r = await h.request('POST', '/api/admin/reset-data', { cookie: shahroz.cookie, body: { confirm: 'DELETE ALL DATA' } });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.deleted.contacts, 3);
+  assert.equal(r.body.deleted.contact_lists, 1);
+  const { rows } = await h.db.query('SELECT (SELECT count(*)::int FROM contacts) AS c, (SELECT count(*)::int FROM contact_lists) AS l, (SELECT count(*)::int FROM users) AS u, (SELECT count(*)::int FROM niches) AS n, (SELECT current_cycle_number FROM rotation_state WHERE id = 1) AS cycle, (SELECT count(*)::int FROM activity_logs) AS logs');
+  assert.deepEqual([rows[0].c, rows[0].l, rows[0].cycle], [0, 0, 1]);
+  assert.ok(rows[0].u === 3 && rows[0].n > 10, 'users and niches kept');
+  assert.equal(rows[0].logs, 1, 'the reset is the first entry of the fresh log');
+  const me = await h.request('GET', '/api/me', { cookie: amman.cookie });
+  assert.equal(me.status, 200, 'sessions survive the reset');
+});

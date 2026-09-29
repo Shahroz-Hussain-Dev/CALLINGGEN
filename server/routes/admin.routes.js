@@ -6,6 +6,7 @@ const analytics = require('../services/analytics.service');
 const contacts = require('../services/contacts.service');
 const users = require('../services/users.service');
 const cycle = require('../services/cycle.service');
+const reset = require('../services/reset.service');
 
 const router = express.Router();
 router.use('/admin', requireAuth, requireOwner);
@@ -15,6 +16,9 @@ router.get('/admin/analytics', async (req, res) => res.json(await analytics.team
 router.get('/admin/contacts', async (req, res) => res.json(await contacts.list(req.user, req.query)));
 router.get('/admin/search', async (req, res) => res.json({ items: await contacts.adminSearch(req.user, req.query.q) }));
 router.get('/admin/users', async (req, res) => res.json({ items: await users.listUsers() }));
+// Danger zone: wipes every contact, list, job, call, follow-up, meeting, research entry and the activity log (owner only,
+// confirmation phrase required, audited as data_reset). Users, niches and settings are kept.
+router.post('/admin/reset-data', async (req, res) => res.json(await reset.resetAllData(req.user, req.body || {})));
 router.patch('/admin/users/:id', async (req, res) => res.json({ user: await users.adminUpdateUser(req.user, req.params.id, req.body || {}) }));
 router.get('/admin/employees', async (req, res) => {
   const state = await cycle.getState();

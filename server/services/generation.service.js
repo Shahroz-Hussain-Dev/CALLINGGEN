@@ -75,6 +75,9 @@ function prepareCandidate(raw, { panel, nicheRows, city, criteria = null }) {
   const phone = raw.phone ? String(raw.phone).trim() : null;
   const whatsapp = raw.whatsapp ? String(raw.whatsapp).trim() : null;
   const normalizedPhone = norm.normalizePhone(phone) || norm.normalizePhone(whatsapp);
+  // Pakistan only: a published number from another country means the business is not in Pakistan.
+  if (normalizedPhone && !normalizedPhone.startsWith('92')) return { ok: false, reason: 'outside_pakistan' };
+  if (/\b(dubai|sharjah|abu dhabi|uae|united arab emirates|london|united kingdom|\buk\b|usa|united states|canada|toronto|saudi|riyadh|jeddah|qatar|doha|india|delhi|mumbai|bangladesh|dhaka)\b/i.test(`${raw.city || ''} ${raw.address || ''}`) && !/pakistan/i.test(`${raw.city || ''} ${raw.address || ''}`)) return { ok: false, reason: 'outside_pakistan' };
   if (whatsapp) social.whatsapp = whatsapp;
   const hasChannel = !!(normalizedPhone || Object.keys(handles).length || social.facebook || social.instagram || social.linkedin || social.tiktok);
   if (!hasChannel) return { ok: false, reason: 'no_public_contact_channel' };

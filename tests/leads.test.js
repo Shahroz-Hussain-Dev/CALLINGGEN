@@ -77,6 +77,17 @@ test('similar names in different cities are NOT merged', async () => {
   assert.equal(r.body.job.saved_count, 2);
 });
 
+test('businesses outside Pakistan are rejected even when the model returns them', async () => {
+  const { amman } = await h.loginAll();
+  h.fake.queueLeads([h.makeLead({ phone: '+971 50 123 4567', city: 'Dubai' }), h.makeLead({ phone: '+44 20 7946 0958' }), h.makeLead()]);
+  const r = await h.request('POST', '/api/leads/generate', { cookie: amman.cookie, body: { contact_type: 'strategy', niche_ids: await nicheIds(amman.cookie, 'strategy', 1), count: 3 } });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.body.batch.saved, 1);
+  assert.equal(r.body.batch.rejected, 2);
+  const { rows } = await h.db.query("SELECT reason FROM generation_rejections WHERE reason = 'outside_pakistan'");
+  assert.equal(rows.length, 2);
+});
+
 test('preserves incomplete data honestly and rejects candidates without any public contact channel or off-target', async () => {
   const { amman } = await h.loginAll();
   h.fake.queueLeads([

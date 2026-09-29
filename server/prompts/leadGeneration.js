@@ -79,7 +79,7 @@ function buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabl
     : 'EXCLUDED: none yet.';
   return `Find up to ${count} real, currently operating businesses for the ${panel === 'strategy' ? 'STRATEGY LEADS' : 'SERVICE SALES LEADS'} panel.
 ${nicheText}
-City: ${city}, Pakistan (nearby areas of the same city are fine).
+City: ${city}, Pakistan (nearby areas of the same city are fine). Country: PAKISTAN ONLY — never a business in the UAE, UK, USA, Saudi Arabia, India or anywhere else, even when it serves Pakistani customers; phone numbers must be Pakistani (+92 / 0xxx).
 ${targeting ? targeting + '\n' : ''}${searchEnabled ? 'Web search is available: use it to find and confirm each business before including it.' : 'Web search is NOT available in this run: include only businesses you are highly confident exist, set every unseen field to null, and set confidence to "needs_verification".'}
 
 ${exclusion}
