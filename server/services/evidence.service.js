@@ -96,7 +96,7 @@ function openingEvidenceFor(lead, ev, maxAgeDays, now = new Date()) {
     const m = OPENING_RE.exec(d.text);
     if (!m) continue;
     const at = m.index;
-    const window = d.text.slice(Math.max(0, at - 140), at + 160).replace(/\s+/g, ' ').trim();
+    const window = d.text.slice(Math.max(0, at - 140), at + 160).replace(/https?:\/\/\S+/g, ' ').replace(/[#*\[\]()_>|]+/g, ' ').replace(/\s+/g, ' ').trim();
     const date = parseMentionedDate(window, now);
     const cand = { quote: window.slice(0, 220), source_url: d.url, opened_on: date ? date.toISOString().slice(0, 10) : null, dated_within: date ? date.getTime() >= since : null, recent_page: d.recent };
     if (cand.dated_within === false) { if (!best) best = cand; continue; } // an old dated announcement: remember it, keep looking for a newer one
