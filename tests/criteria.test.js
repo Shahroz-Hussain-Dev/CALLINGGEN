@@ -8,7 +8,7 @@ const evidence = require('../server/services/evidence.service');
 const prompts = require('../server/prompts/leadGeneration');
 require('../server/services/settings.service').getWebSearchKeys = async () => ({});
 
-const STARTUP = { stage: 'startup', founded_from_year: 2026, max_employees: 10, leadership: 'female_preferred', max_followers: null, max_age_days: null, notes: '' };
+const STARTUP = { stage: 'startup', founded_from_year: 2026, max_employees: 10, leadership: 'female_preferred', max_followers: null, max_age_days: null, newness: 'preferred', notes: '' };
 
 test('criteria are validated, described and written into the prompt', () => {
   const n = criteria.normalize({ stage: 'startup', founded_from_year: '2026', max_employees: '10', leadership: 'female_preferred' });
@@ -30,8 +30,9 @@ test('check enforces founding year, team size and audience size, and confirms ma
   assert.equal(criteria.check({ founded_year: 2024 }, STARTUP).reason, 'fails_criteria_founded_before');
   assert.equal(criteria.check({ team_size_estimate: 25 }, STARTUP).reason, 'fails_criteria_team_size');
   assert.equal(criteria.check({ company_size: 'large' }, STARTUP).reason, 'fails_criteria_established');
-  assert.equal(criteria.check({ company_size: 'medium' }, STARTUP).reason, 'fails_criteria_team_size');
-  assert.equal(criteria.check({}, STARTUP, { followers: 45000 }).reason, 'fails_criteria_established');
+  assert.equal(criteria.check({ company_size: 'medium' }, STARTUP).ok, true, 'a "medium" estimate alone does not disqualify');
+  assert.equal(criteria.check({}, STARTUP, { followers: 65000 }).reason, 'fails_criteria_established');
+  assert.equal(criteria.check({}, STARTUP, { followers: 45000 }).ok, true);
   assert.deepEqual(criteria.check({ startup_signals: ['grand opening'] }, STARTUP, { followers: 900 }), { ok: true, match: 'confirmed' });
   assert.deepEqual(criteria.check({ company_size: 'small' }, STARTUP), { ok: true, match: 'unknown' });
   assert.deepEqual(criteria.check({ company_size: 'large' }, criteria.normalize({})), { ok: true, match: null });

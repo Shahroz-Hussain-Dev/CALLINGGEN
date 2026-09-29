@@ -115,7 +115,8 @@ async function system(body, s) {
     <label class="field span-2"><span>Target cities (comma separated; generation rotates through them)</span><textarea name="target_cities">${(sy.target_cities || []).join(', ')}</textarea></label>
     <div class="span-2"><h3 class="mt-2">Lead targeting (applies to every new list)</h3><p class="small muted">Written into the research instructions and enforced on every candidate: a business is dropped when a source shows it started before the year, has more people than allowed, or is an established account. Quotes proving a business is new, small or female-led are kept as "startup signals".</p></div>
     <label class="field"><span>Business stage</span><select name="lc_stage"><option value="any" ${lc.stage !== 'startup' ? 'selected' : ''}>Any</option><option value="startup" ${lc.stage === 'startup' ? 'selected' : ''}>Startups / recently started only</option></select></label>
-    <label class="field"><span>Opened within the last … days (blank = any; 30 = only businesses that opened this month, opening evidence required)</span><input type="number" name="lc_max_age_days" min="1" max="3650" value="${lc.max_age_days || ''}"></label>
+    <label class="field"><span>Opened within the last … days (blank = any)</span><input type="number" name="lc_max_age_days" min="1" max="3650" value="${lc.max_age_days || ''}"></label>
+    <label class="field"><span>How strict about newness</span><select name="lc_newness"><option value="preferred" ${lc.newness !== 'required' ? 'selected' : ''}>Preferred: new businesses first, small new-looking ones allowed</option><option value="required" ${lc.newness === 'required' ? 'selected' : ''}>Required: opening evidence mandatory</option></select></label>
     <label class="field"><span>Started in year … or later (blank = any)</span><input type="number" name="lc_founded_from_year" min="1990" max="2100" value="${lc.founded_from_year || ''}"></label>
     <label class="field"><span>Maximum employees (blank = any)</span><input type="number" name="lc_max_employees" min="1" max="100000" value="${lc.max_employees || ''}"></label>
     <label class="field"><span>Leadership</span><select name="lc_leadership"><option value="any" ${lc.leadership !== 'female_preferred' ? 'selected' : ''}>Any</option><option value="female_preferred" ${lc.leadership === 'female_preferred' ? 'selected' : ''}>Female-led preferred (male-led acceptable)</option></select></label>
@@ -139,7 +140,7 @@ async function system(body, s) {
     e.preventDefault();
     const v = formValues(e.target);
     v.target_cities = v.target_cities.split(',').map((x) => x.trim()).filter(Boolean);
-    v.lead_criteria = { stage: v.lc_stage, founded_from_year: v.lc_founded_from_year || null, max_employees: v.lc_max_employees || null, leadership: v.lc_leadership, max_followers: v.lc_max_followers || null, max_age_days: v.lc_max_age_days || null, notes: v.lc_notes || '' };
+    v.lead_criteria = { stage: v.lc_stage, founded_from_year: v.lc_founded_from_year || null, max_employees: v.lc_max_employees || null, leadership: v.lc_leadership, max_followers: v.lc_max_followers || null, max_age_days: v.lc_max_age_days || null, newness: v.lc_newness || 'preferred', notes: v.lc_notes || '' };
     const weights = {}; for (const k of Object.keys(v)) if (k.startsWith('lsw_')) weights[k.slice(4)] = Number(v[k]);
     v.lead_scoring = { enabled: !!v.ls_enabled, min_probability: Number(v.ls_min_probability), pivot: Number(v.ls_pivot), weights };
     v.niche_priority = String(v.niche_priority || '').split('\n').map((x) => x.trim()).filter(Boolean);

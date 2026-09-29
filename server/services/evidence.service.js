@@ -262,15 +262,21 @@ async function gatherUncached({ panel, niche, city, criteria, timeBudgetMs, maxP
   const queries = buildQueries({ panel, niche, city, criteria });
   const seen = new Map(); // url -> result
   const runQueries = async () => {
-    for (const { q, recency } of queries) {
-      if (Date.now() - started > timeBudgetMs * 0.65) break;
-      const results = await websearch.search(q, { count: 10, recency });
-      for (const r of results) {
-        let host; try { host = new URL(r.url).hostname.replace(/^www\./, ''); } catch (_) { continue; }
-        if (SKIP_HOSTS.test(host)) continue;
-        if (!seen.has(r.url)) seen.set(r.url, { ...r, host, queries: [q] }); else { const e = seen.get(r.url); e.queries.push(q); if (r.recent) e.recent = r.recent; }
+    // Two searches in flight at a time: engines with their own pacing (the key-less proxy) serialize internally, keyed
+    // engines and direct engines benefit from the overlap.
+    let qi = 0;
+    const worker = async () => {
+      while (qi < queries.length && Date.now() - started < timeBudgetMs * 0.65) {
+        const { q, recency } = queries[qi++];
+        const results = await websearch.search(q, { count: 10, recency });
+        for (const r of results) {
+          let host; try { host = new URL(r.url).hostname.replace(/^www\./, ''); } catch (_) { continue; }
+          if (SKIP_HOSTS.test(host)) continue;
+          if (!seen.has(r.url)) seen.set(r.url, { ...r, host, queries: [q] }); else { const e = seen.get(r.url); e.queries.push(q); if (r.recent) e.recent = r.recent; }
+        }
       }
-    }
+    };
+    await Promise.all([worker(), worker()]);
   };
   await runQueries();
   if (!seen.size) {

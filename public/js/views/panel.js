@@ -114,7 +114,7 @@ export async function renderPanel(root, type) {
       <div class="grid grid-4 mt-2 small"><div><span class="muted">Saved</span><br><b>${num(saved)}</b></div><div><span class="muted">Duplicates rejected</span><br><b>${num(j.duplicate_count || 0)}</b></div><div><span class="muted">Needs verification</span><br><b>${num(j.needs_verification_count || 0)}</b></div><div><span class="muted">Rejected / invalid</span><br><b>${num(j.rejected_count || 0)}</b></div></div>
       ${batch && batch.warnings && batch.warnings.includes('grounding_unavailable') ? raw('<div class="warn-box small mt-2">Web research (Google Search grounding) is not available on the current Gemini API key, so these contacts come from the model\'s own knowledge and are marked <b>Needs Verification</b>. Enable billing for the Gemini API key in Google AI Studio to unlock live web research and the Pro model.</div>') : raw('')}
       ${batch ? html`<div class="small muted mt-2">Last batch: ${batch.niche} · ${batch.city} · received ${batch.received}, saved ${batch.saved}, duplicates ${batch.duplicates}, rejected ${batch.rejected}${batch.web_search_used ? (batch.research_mode === 'evidence' ? ` · free web research (${batch.sources || 0} sources)` : ' · web research used') : ' · no web research'}${batch.model ? ` · ${batch.model}` : ''}${batch.search_notes ? raw(`<details class="mt-1"><summary class="small">Research notes</summary><div class="note-block mt-1">${esc(batch.search_notes)}</div></details>`) : raw('')}</div>` : raw('')}
-      ${error ? html`<div class="error-box mt-2 small">${error}</div>` : raw('')}
+      ${error ? html`<div class="${/continuing in|Retrying automatically/.test(error) ? 'warn-box' : 'error-box'} mt-2 small">${error}</div>` : raw('')}
       ${j.attempts ? html`<div class="tiny faint mt-1">${j.attempts} batch attempt(s)${j.last_batch_at ? ' · last ' + timeAgo(j.last_batch_at) : ''}</div>` : raw('')}
     </div>`;
     const cancel = box.querySelector('#genCancel');
@@ -165,11 +165,20 @@ export async function renderPanel(root, type) {
     if (!retryPending) renderGen(job, batch, null);
     // continue batches until done
     const listId = view.selectedListId;
+    let busyWaits = 0;
     while (alive && generating && job && (['pending', 'running'].includes(job.status) || retryPending)) {
       retryPending = false;
       try {
         const r = await api.post(`/api/lists/${listId}/generate`, {});
         job = r.job; batch = r.batch;
+        if (batch && batch.warnings && batch.warnings.includes('search_busy')) {
+          // the search engines returned nothing (rate limit): pause, then continue; this is not an attempt and not an error
+          busyWaits++;
+          if (busyWaits > 8) { error = 'The free search engines have been rate-limited for several minutes. Wait a little and click Continue generating.'; break; }
+          for (let s = Math.round((batch.retry_after_ms || 30000) / 1000); s > 0 && alive && generating; s--) { renderGenProgress(job, batch, `Search engines are busy — continuing in ${s}s (${busyWaits}/8)…`); await new Promise((res) => setTimeout(res, 1000)); }
+          continue;
+        }
+        busyWaits = 0;
         renderGenProgress(job, batch, null);
         await reloadLists(); renderContacts();
       } catch (e) {

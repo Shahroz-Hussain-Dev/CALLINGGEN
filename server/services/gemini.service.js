@@ -185,6 +185,7 @@ function mapError(err) {
     else if (err.status === 404) mapped = new AppError('None of the configured Gemini models is available to this API key. Update GEMINI_MODEL / GEMINI_FALLBACK_MODELS.', 502, 'ai_model_unavailable');
     else if (err.status === 429) mapped = new AppError('The Gemini API quota for this key is exhausted (free-tier limits). Wait a minute and try again, or enable billing in Google AI Studio to unlock higher limits and Pro models.', 429, 'ai_rate_limited');
     else if (err.status === 504) mapped = new AppError('The Gemini request timed out. Try again; long research runs continue in batches.', 504, 'ai_timeout');
+    else if (err.code === 'research_empty') mapped = err;
     else if (err.status === 503) mapped = new AppError('Gemini is temporarily overloaded (high demand). Please try again in a moment.', 503, 'ai_unavailable');
     else if (err.status === 400) mapped = new AppError(`Gemini rejected the request: ${msg.slice(0, 300)}`, 502, 'ai_bad_request');
     else mapped = new AppError(`Gemini API error (${err.status}): ${msg.slice(0, 200)}`, 503, 'ai_api_error');
@@ -360,7 +361,7 @@ function useEvidenceMode(webSearch) {
 async function generateFromEvidence(client, { panel, niches, city, count, excludeNames, system, usage, criteria = null, nichePriority = [], scoring = null }) {
   const niche = niches[0];
   const ev = await evidence.gather({ panel, niche, city, criteria, timeBudgetMs: Math.max(15000, Math.min(config.evidence.timeBudgetMs, client.remainingMs() - 90000)) });
-  if (!ev.results.length) throw new AppError('Web research returned no results for this niche and city (the free search engines may be rate-limited right now). The batch will be retried.', 503, 'ai_unavailable');
+  if (!ev.results.length) throw new AppError('The search engines returned nothing for this search (they are probably rate-limited right now); the next attempt continues in a moment.', 503, 'research_empty');
   const rendered = evidence.render(ev);
   const userText = `${prompts.buildUserPrompt({ panel, niches, city, count, excludeNames, searchEnabled: true, criteria }).replace(/Return the leads by calling submit_leads once\./, '').replace(/Web search is available: use it to find and confirm each business before including it\./, 'Use ONLY the evidence below.')}
 

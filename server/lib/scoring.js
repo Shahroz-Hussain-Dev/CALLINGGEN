@@ -55,7 +55,7 @@ const FEATURES = [
 const DEFAULT_CONFIG = Object.freeze({
   enabled: true,
   panel: 'strategy',
-  min_probability: 40, // leads below this are rejected (low_sell_probability)
+  min_probability: 30, // leads below this are rejected (low_sell_probability)
   pivot: 3.0, // points that correspond to a 50 % chance
   scale: 1.2, // how quickly the probability moves with the points
   weights: Object.fromEntries(FEATURES.map(([k, , w]) => [k, w])),

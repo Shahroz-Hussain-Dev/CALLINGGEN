@@ -35,9 +35,15 @@ test('scoring turns weighted signals into a sell probability and ranks a new gap
 });
 
 test('opened-within window: the prompt demands opening evidence, recent-page queries are used, and leads without it are rejected', () => {
-  const c = criteria.normalize({ max_age_days: 30 });
+  const c = criteria.normalize({ max_age_days: 30, newness: 'required' });
   assert.match(criteria.promptText(c), /OPENED within the last 30 days/);
-  assert.match(criteria.describe(c), /opened within the last 30 days/);
+  assert.match(criteria.describe(c), /opened within the last 30 days \(evidence required\)/);
+  const soft = criteria.normalize({ max_age_days: 30 });
+  assert.equal(soft.newness, 'preferred');
+  assert.match(criteria.promptText(soft), /PRIORITY: businesses that opened within the last 30 days/);
+  assert.deepEqual(criteria.check({ business_name: 'A', company_size: 'small' }, soft, {}), { ok: true, match: 'unknown' }, 'preferred mode keeps a small business without opening evidence');
+  assert.deepEqual(criteria.check({ business_name: 'A' }, soft, { opening: { quote: 'now open', dated_within: null } }), { ok: true, match: 'likely' });
+  assert.equal(criteria.check({ business_name: 'A' }, soft, { opening: { quote: 'since 2015', opened_on: '2015-01-15', dated_within: false } }).reason, 'fails_criteria_opened_earlier', 'clearly old businesses are still dropped');
   const plan = evidence.buildQueries({ panel: 'strategy', niche: 'Dental Clinics', city: 'Karachi', criteria: c });
   assert.equal(plan.length, 6);
   assert.equal(plan.filter((x) => x.recency === 'm').length, 5, 'five searches limited to the past month');
@@ -69,19 +75,21 @@ test('opening evidence is extracted from the sources with absolute and relative 
   const fresh = { results: [{ title: 'Glow Lab (@glowlab.khi) - Instagram', snippet: '184 Followers, 90 Following, 9 Posts - Glow Lab Karachi. Skin clinic, DHA. Bookings 0300-1234567', url: 'https://www.instagram.com/glowlab.khi/' }], pages: [] };
   const acc = evidence.openingEvidenceFor({ business_name: 'Glow Lab', social_profiles: { instagram: 'https://instagram.com/glowlab.khi' } }, fresh, 30, now);
   assert.ok(acc && acc.kind === 'new_account', 'a brand-new account counts as opening evidence: ' + JSON.stringify(acc));
-  assert.deepEqual(criteria.check({ business_name: 'Glow Lab' }, criteria.normalize({ max_age_days: 30 }), { opening: acc }), { ok: true, match: 'likely' });
+  assert.deepEqual(criteria.check({ business_name: 'Glow Lab' }, criteria.normalize({ max_age_days: 30, newness: 'required' }), { opening: acc }), { ok: true, match: 'likely' });
   const established = { results: [{ title: 'Big Salon (@bigsalon) - Instagram', snippet: '45K Followers, 120 Following, 2,300 Posts - Big Salon Karachi', url: 'https://www.instagram.com/bigsalon/' }], pages: [] };
   assert.equal(evidence.openingEvidenceFor({ business_name: 'Big Salon', social_profiles: { instagram: 'https://instagram.com/bigsalon' } }, established, 30, now), null);
   // verifyLead: model quote must be in the evidence; the server extraction wins; criteria applied
   const corpus = 'noor dental care (@noordental) instagram we are now open! grand opening 12 september 2026 at dha phase 6. book on 0321-1234567 https://www.instagram.com/noordental/';
   const full = { corpus, phones: new Set(['923211234567']), urls: new Set(['https://www.instagram.com/noordental/']), results: ev.results, pages: [] };
-  const r = evidence.verifyLead({ business_name: 'Noor Dental Care', phone: '0321-1234567', social_profiles: { instagram: 'https://instagram.com/noordental' }, opening_quote: 'invented quote', opened_on: '2026-09-12' }, full, criteria.normalize({ max_age_days: 30 }));
+  const r = evidence.verifyLead({ business_name: 'Noor Dental Care', phone: '0321-1234567', social_profiles: { instagram: 'https://instagram.com/noordental' }, opening_quote: 'invented quote', opened_on: '2026-09-12' }, full, criteria.normalize({ max_age_days: 30, newness: 'required' }));
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.equal(r.lead.criteria_match, 'confirmed'); assert.equal(r.lead.opening.opened_on, '2026-09-12'); assert.equal(r.lead.opening_quote, undefined);
-  const none = evidence.verifyLead({ business_name: 'Old Smile Dental', phone: '0321-1234567', social_profiles: {} }, { ...full, corpus: corpus + ' old smile dental serving karachi since 2015' }, criteria.normalize({ max_age_days: 30 }));
+  const none = evidence.verifyLead({ business_name: 'Old Smile Dental', phone: '0321-1234567', social_profiles: {} }, { ...full, corpus: corpus + ' old smile dental serving karachi since 2015' }, criteria.normalize({ max_age_days: 30, newness: 'required' }));
   assert.equal(none.ok, false); assert.equal(none.reason, 'fails_criteria_opened_earlier', 'a "since 2015" statement dates the opening outside the window');
-  const blank = evidence.verifyLead({ business_name: 'Quiet Clinic', phone: '0321-1234567', social_profiles: {} }, { ...full, corpus: corpus + ' quiet clinic karachi dental' }, criteria.normalize({ max_age_days: 30 }));
+  const blank = evidence.verifyLead({ business_name: 'Quiet Clinic', phone: '0321-1234567', social_profiles: {} }, { ...full, corpus: corpus + ' quiet clinic karachi dental' }, criteria.normalize({ max_age_days: 30, newness: 'required' }));
   assert.equal(blank.ok, false); assert.equal(blank.reason, 'fails_criteria_not_new');
+  const soft = evidence.verifyLead({ business_name: 'Quiet Clinic', phone: '0321-1234567', social_profiles: {} }, { ...full, corpus: corpus + ' quiet clinic karachi dental' }, criteria.normalize({ max_age_days: 30 }));
+  assert.equal(soft.ok, true, 'preferred mode keeps it'); assert.equal(soft.lead.criteria_match, 'unknown');
 });
 
 test('a doctor\'s own number is taken from public pages next to the name, skipping reception lines and preferring mobiles', async () => {

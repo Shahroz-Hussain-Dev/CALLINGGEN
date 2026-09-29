@@ -265,6 +265,14 @@ async function runBatch(user, jobId, { forceUnlock = false, timeBudgetMs } = {})
     generated = await ai.generateLeadCandidates({ userId: user.role === 'owner' && job.current_owner_id !== user.id ? job.current_owner_id : user.id, panel: job.contact_type, niches: nicheNames, city, count, excludeNames, criteria, nichePriority, scoring: scoringCfg, ...(timeBudgetMs ? { timeBudgetMs } : {}) });
   } catch (err) {
     const mapped = ai.mapError(err);
+    if (mapped.code === 'research_empty') {
+      // Nothing came back from the search engines (rate limit): not a failure and not an attempt. Release the lock and let
+      // the client continue after a short pause.
+      await db.query("UPDATE generation_jobs SET status = 'pending', last_error = NULL, locked_at = NULL, lock_token = NULL WHERE id = $1", [id]);
+      await syncListProgress(job.list_id);
+      logger.warn('Lead generation batch skipped: search engines returned nothing', { jobId: id, niche: nicheNames.join(', '), city });
+      return { job: jobView(await getJob(id)), batch: { ...summary, warnings: ['search_busy'], search_notes: mapped.message, retry_after_ms: 30000 } };
+    }
     logger.warn('Lead generation batch failed', { jobId: id, code: mapped.code, message: mapped.message });
     await db.query("UPDATE generation_jobs SET status = 'failed', last_error = $2, attempts = attempts + 1, last_batch_at = now(), locked_at = NULL, lock_token = NULL WHERE id = $1", [id, `${mapped.code}: ${mapped.message}`.slice(0, 500)]);
     await syncListProgress(job.list_id);

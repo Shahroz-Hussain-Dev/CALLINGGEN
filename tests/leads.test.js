@@ -232,3 +232,25 @@ test('the owner can create a list for an employee, and continuing a completed li
   assert.deepEqual(more.body.list.selected_niches.map((n) => n.id).sort(), ids.sort(), 'niches preserved when the completed list is extended');
   assert.equal(more.body.list.target_size, 2);
 });
+
+test('when the search engines return nothing the batch pauses instead of failing: job stays pending, no attempt counted', async () => {
+  const { amman } = await h.loginAll();
+  const ai = require('../server/services/ai.service');
+  const { AppError } = require('../server/lib/errors');
+  const orig = ai.generateLeadCandidates;
+  ai.generateLeadCandidates = async () => { throw new AppError('The search engines returned nothing for this search', 503, 'research_empty'); };
+  try {
+    const r = await h.request('POST', '/api/leads/generate', { cookie: amman.cookie, body: { contact_type: 'strategy', niche_ids: await nicheIds(amman.cookie, 'strategy', 1), count: 2 } });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(r.body.batch.warnings, ['search_busy']);
+    assert.equal(r.body.batch.retry_after_ms, 30000);
+    assert.equal(r.body.job.status, 'pending');
+    assert.equal(r.body.job.attempts, 0);
+    assert.equal(r.body.job.last_error, null);
+    assert.equal(r.body.job.locked, false, 'lock released so the next call can run');
+  } finally { ai.generateLeadCandidates = orig; }
+  h.fake.queueLeads([h.makeLead()]);
+  const again = await h.request('POST', `/api/lists/${(await h.request('GET', '/api/lists', { cookie: amman.cookie })).body.items[0].id}/generate`, { cookie: amman.cookie, body: {} });
+  assert.equal(again.status, 200, again.text);
+  assert.equal(again.body.batch.saved, 1, 'generation continues normally afterwards');
+});
